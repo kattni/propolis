@@ -182,9 +182,24 @@ class Propolis(toga.App):
 
     async def on_exit(self):
         self._list_keys.remove()
+        await self._finish_tasks()
         await self._close_github()
         self.store.close()
         return True
+
+    async def _finish_tasks(self):
+        """Cancel every other task and wait for it to end, as ``asyncio.run``
+        does on the way out. Toga's event loop just stops.
+
+        AnyIO sets up each HTTPS connection in a worker thread, because the SSL
+        context comes from truststore. The thread stops only when the task that
+        opened the connection ends, and Python won't exit while it's running.
+        """
+        others = asyncio.all_tasks() - {asyncio.current_task()}
+        for task in others:
+            task.cancel()
+        if others:
+            await asyncio.wait(others)
 
     # Signing in and out
 
