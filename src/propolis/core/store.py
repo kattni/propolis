@@ -19,9 +19,11 @@ from propolis.core.events import (
     to_row,
 )
 from propolis.core.state import State
+from propolis.core.threads import ThreadInfo
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS thread_info (key TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS event (
     id TEXT PRIMARY KEY,
     at TEXT NOT NULL,
@@ -99,6 +101,29 @@ class Store:
             )
         )
 
+    # Local caches. Unlike events, these aren't synced between devices.
+
+    def info(self, key: str) -> ThreadInfo | None:
+        row = self._db.execute(
+            "SELECT data FROM thread_info WHERE key = ?", (key,)
+        ).fetchone()
+        return ThreadInfo.from_json(row[0]) if row else None
+
+    def save_info(self, info: ThreadInfo) -> None:
+        with self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO thread_info VALUES (?, ?)",
+                (info.key, info.to_json()),
+            )
+
+    def get_meta(self, key: str) -> str | None:
+        row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._db:
+            self._db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, value))
+
     def _new(self) -> dict:
         return {"id": uuid4().hex, "at": self._clock(), "device": self.device}
 
@@ -134,10 +159,8 @@ class Store:
         self._last = order(events[-1]) if events else None
 
     def _device_id(self) -> str:
-        row = self._db.execute("SELECT value FROM meta WHERE key = 'device'").fetchone()
-        if row:
-            return row[0]
-        device = uuid4().hex
-        with self._db:
-            self._db.execute("INSERT INTO meta VALUES ('device', ?)", (device,))
+        device = self.get_meta("device")
+        if device is None:
+            device = uuid4().hex
+            self.set_meta("device", device)
         return device

@@ -22,6 +22,8 @@ test_sources = [
 ]
 
 requires = [
+    "httpx2>=2.16",
+    "keyring>=25",
 ]
 test_requires = [
     "pytest",
