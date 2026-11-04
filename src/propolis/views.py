@@ -6,6 +6,7 @@ from datetime import datetime
 
 from propolis.core.state import ATTENTION
 from propolis.core.store import Store
+from propolis.core.threads import ThreadInfo
 
 INBOX = "inbox"
 """The view ID of the Inbox. Every other view's ID is a label ID."""
@@ -13,6 +14,26 @@ INBOX = "inbox"
 NEW_ACTIVITY = "● "
 
 _KINDS = {"PullRequest": "Pull request"}
+
+REASONS = {
+    "approval_requested": "Approval requested",
+    "assign": "Assigned",
+    "author": "Author",
+    "ci_failure": "Failing CI",
+    "comment": "Commented",
+    "invitation": "Invitation",
+    "manual": "Subscribed",
+    "member_feature_requested": "Feature requested",
+    "mention": "Mentioned",
+    "review_requested": "Review requested",
+    "security_advisory_credit": "Security advisory credit",
+    "security_alert": "Security alert",
+    "state_change": "State change",
+    "subscribed": "Watching",
+    "team_mention": "Team mentioned",
+}
+"""GitHub's notification reasons, in plain words. ``subscribed`` means you're
+watching the repo; ``manual`` means you subscribed to the thread itself."""
 
 
 @dataclass(frozen=True)
@@ -76,13 +97,68 @@ def sidebar(store: Store) -> list[SidebarItem]:
     return items
 
 
-def rows(store: Store, view: str) -> list[ThreadRow]:
+@dataclass(frozen=True)
+class Filters:
+    """Narrow the thread list. ``None`` means any."""
+
+    repo: str | None = None
+    reason: str | None = None
+    kind: str | None = None
+
+    @property
+    def active(self) -> bool:
+        return any([self.repo, self.reason, self.kind])
+
+    def matches(self, info: ThreadInfo | None) -> bool:
+        if not self.active:
+            return True
+        return (
+            info is not None
+            and self.repo in (None, info.repo)
+            and self.reason in (None, info.reason)
+            and self.kind in (None, info.kind)
+        )
+
+
+@dataclass(frozen=True)
+class FilterOptions:
+    repos: list[str]
+    reasons: list[tuple[str, str]]
+    """Each reason, and its name."""
+    kinds: list[tuple[str, str]]
+    """Each type, and its name."""
+
+
+def filter_options(store: Store) -> FilterOptions:
+    """The repos, reasons and types among threads in any view."""
+    state = store.state
+    keys = set(state.inbox())
+    for label_id in state.labels:
+        keys.update(state.labelled(label_id))
+    infos = [info for key in keys if (info := store.info(key))]
+
+    def named(values: set[str], names: dict[str, str]) -> list[tuple[str, str]]:
+        return sorted(
+            ((value, names.get(value, value)) for value in values),
+            key=lambda pair: pair[1],
+        )
+
+    return FilterOptions(
+        repos=sorted({info.repo for info in infos}),
+        reasons=named({info.reason for info in infos if info.reason}, REASONS),
+        kinds=named({info.kind for info in infos}, _KINDS),
+    )
+
+
+def rows(store: Store, view: str, filters: Filters = Filters()) -> list[ThreadRow]:
     state = store.state
     keys = state.inbox() if view == INBOX else state.labelled(view)
     result = []
     for key in keys:
         thread = state.threads[key]
         info = store.info(key)
+        if not filters.matches(info):
+            continue
         when = thread.last_activity if view == INBOX else thread.labels[view]
         title = info.title if info else key
         result.append(

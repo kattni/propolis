@@ -3,7 +3,7 @@ from itertools import count
 
 from propolis.core.store import Store
 from propolis.core.threads import ThreadInfo
-from propolis.views import INBOX, rows, sidebar
+from propolis.views import INBOX, Filters, filter_options, rows, sidebar
 
 
 def test_views_show_counts_and_thread_details(tmp_path):
@@ -52,3 +52,37 @@ def test_views_show_counts_and_thread_details(tmp_path):
             ("High priority", 6, 0, 0),
             ("Later", 7, 1, 1),
         ]
+
+
+def test_filters_narrow_the_thread_list(tmp_path):
+    with Store(tmp_path / "propolis.db") as store:
+        for number, repo, reason, kind in [
+            (1, "beeware/toga", "mention", "Issue"),
+            (2, "beeware/toga", "subscribed", "PullRequest"),
+            (3, "beeware/briefcase", "mention", "PullRequest"),
+        ]:
+            key = f"{repo}#{number}"
+            store.save_info(
+                ThreadInfo(
+                    key=key,
+                    kind=kind,
+                    repo=repo,
+                    title=f"Thread {number}",
+                    url=f"https://github.com/{repo}/issues/{number}",
+                    number=number,
+                    reason=reason,
+                )
+            )
+            store.record_activity(key, datetime(2026, 11, 1, number, tzinfo=UTC))
+
+        options = filter_options(store)
+        assert options.repos == ["beeware/briefcase", "beeware/toga"]
+        assert options.reasons == [("mention", "Mentioned"), ("subscribed", "Watching")]
+        assert options.kinds == [("Issue", "Issue"), ("PullRequest", "Pull request")]
+
+        def numbers(**filters):
+            return [row.key[-1] for row in rows(store, INBOX, Filters(**filters))]
+
+        assert numbers(repo="beeware/toga") == ["2", "1"]
+        assert numbers(reason="mention") == ["3", "1"]
+        assert numbers(repo="beeware/toga", kind="PullRequest") == ["2"]

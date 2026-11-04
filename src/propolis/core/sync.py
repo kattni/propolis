@@ -7,6 +7,9 @@ from propolis.core.activity import needs_response
 from propolis.core.github import GitHub, Notification, parse_time
 from propolis.core.store import Store
 
+CACHE_VERSION = "2"
+"""Bump when ThreadInfo gains a field. 2: the notification reason."""
+
 
 class Sync:
     def __init__(self, store: Store, github: GitHub):
@@ -27,13 +30,22 @@ class Sync:
         for info, activity in await self._github.ci_failures():
             if needs_response(activity, self._me):
                 self._store.record_activity(info.key, activity.at)
-            if self._store.info(info.key) is None:
+            # Keep details from a notification, which are richer. Refresh
+            # those of threads known only through CI polling.
+            previous = self._store.info(info.key)
+            if previous is None or previous.notification_id is None:
                 self._store.save_info(info)
 
     async def _sync_notifications(self) -> None:
+        # When the cached thread details gain a field, refetch every
+        # notification once so the details catch up. That costs pages of
+        # notifications, but no timelines, as nothing has changed.
+        refetch = self._store.get_meta("cache_version") != CACHE_VERSION
+        since = parse_time(self._store.get_meta("notifications_since"))
+        last_modified = self._store.get_meta("notifications_last_modified")
         notifications, last_modified = await self._github.notifications(
-            since=parse_time(self._store.get_meta("notifications_since")),
-            last_modified=self._store.get_meta("notifications_last_modified"),
+            since=None if refetch else since,
+            last_modified=None if refetch else last_modified,
         )
         if notifications is None:
             return
@@ -46,6 +58,7 @@ class Sync:
             self._store.set_meta("notifications_since", since.isoformat())
         if last_modified:
             self._store.set_meta("notifications_last_modified", last_modified)
+        self._store.set_meta("cache_version", CACHE_VERSION)
 
     async def _check(self, notification: Notification) -> None:
         """Record the latest activity on a thread that needs a response."""

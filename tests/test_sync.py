@@ -71,6 +71,7 @@ async def test_sync_records_activity_that_needs_a_response(
 
     assert store.state.inbox() == ["beeware/toga#3", "beeware/toga#1"]
     assert store.info("beeware/toga#1").title == "Thread 1"
+    assert store.info("beeware/toga#1").reason == "subscribed"
 
 
 async def test_sync_records_failing_ci_on_my_pull_requests(store, github, fake_github):

@@ -159,6 +159,7 @@ class GitHub:
                     title=pr["title"],
                     url=pr["url"],
                     number=pr["number"],
+                    reason="ci_failure",
                 )
                 failures.append(
                     (info, Activity(at=max(failed_at), actor="", ci_failed=True))
@@ -215,6 +216,7 @@ def _notification(item: dict) -> Notification:
             url=url,
             number=number,
             notification_id=item["id"],
+            reason=item["reason"],
         ),
         reason=item["reason"],
         unread=item["unread"],

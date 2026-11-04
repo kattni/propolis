@@ -75,10 +75,11 @@ Scopes:
 ## Architecture
 
 - `propolis.core`: pure Python with no Toga imports. It holds the domain model, storage, the activity logic, sync, triage with write-back, sign-in, and the GitHub client (async `httpx2`). It's developed test-first with pytest, at a few agreed seams. GitHub interactions are tested against a fake GitHub (`httpx2.MockTransport` serving small hand-written JSON), never the live API.
-- Thread details from GitHub (title, link, notification ID, how far each thread has been checked) are cached in the same SQLite database. They aren't events and aren't synced: each device fetches its own.
+- Thread details from GitHub (title, link, notification ID, GitHub's latest reason for notifying you, how far each thread has been checked) are cached in the same SQLite database. They aren't events and aren't synced: each device fetches its own. When the details gain a field, a cache version makes the next sync refetch every notification once, so existing threads catch up. That costs pages of notifications, but no timelines. A pull request known only through CI polling has the reason "Failing CI".
 - `propolis.views`: pure Python with no Toga imports. It turns the Store's state into what the UI shows, and it's tested. This is where the UI's logic lives:
   - the sidebar's views, each with its number key, its thread count and how many have new activity, shown as "4   Blocked  (3, 1 new)";
-  - each thread's row: title with a ● for new activity, repo, type, and when.
+  - each thread's row: title with a ● for new activity, repo, type, and when;
+  - filtering: the repos, reasons and types to offer, and the rows that match.
 - `propolis.app`: Toga only, and kept to wiring, so it has no tests; it's checked by running it.
   - Without a token in the keychain, the window shows the device-flow code and a button that opens GitHub. If GitHub rejects the token, the app forgets it and shows sign-in again.
   - Otherwise, the window has a sidebar of views on the left. On the right, the thread list sits above a web view showing the selected thread's GitHub page, so you can read and reply without leaving the app. A status line shows the last sync.
@@ -98,7 +99,10 @@ Scopes:
   | Edit Label… for the label selected in the sidebar: rename, change "Flag on activity", or delete. Delete asks first, and says how many threads go back to the Inbox. Double-clicking a label also opens it. | ⌘I |
   | Move Label Up / Down, which changes the number keys | ⌥⌘↑ / ⌥⌘↓ |
   | Sign Out of GitHub | |
+  | Clear Filters | ⇧⌘F |
   | Keyboard Shortcuts (Help menu) | ⌘/ |
+
+  A filter bar above the thread list narrows it by repo, reason and type. Reasons are in plain words: Mentioned, Review requested, Watching (you watch the repo), Subscribed (you subscribed to the thread), Failing CI, and so on. A reason is GitHub's latest for the thread, so it can change. Filters stay set as you switch views and reset when you quit. Sidebar counts ignore them, and the window title says "(filtered)" while one is on. Number keys and Done move to the next thread that matches.
 
   Each command's description is both its tooltip in the menus and its entry in the Keyboard Shortcuts window, so the two can't drift apart. A note at the bottom of the sidebar says how to open that window. Until a thread is selected, the web view shows a placeholder that follows light and dark mode.
 
@@ -147,5 +151,5 @@ macOS desktop first. Because the logic lives in `core`, mobile is mostly UI work
 2. GitHub client: device-flow sign-in, notifications sync, timeline checks, write-back.
 3. Toga MVP: Inbox and label views, apply and remove labels, Done, open in browser, manual refresh.
 4. Label management: rename, reorder, delete, and flag on activity. Creating labels and background polling arrived early, in phase 3.
-5. Polish: filters by repo, reason and type; an optional `WebView` detail pane.
+5. Polish: filters by repo, reason and type. The `WebView` detail pane arrived early, in phase 3.
 6. Cross-device sync, then mobile.

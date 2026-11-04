@@ -21,6 +21,9 @@ class ThreadInfo:
     notification_id: str | None = None
     checked_until: datetime | None = None
     """How far this device has checked the thread for activity."""
+    reason: str | None = None
+    """GitHub's latest reason for notifying you, such as ``mention``, or
+    ``ci_failure`` for a pull request found only through CI polling."""
 
     def to_json(self) -> str:
         data = asdict(self)

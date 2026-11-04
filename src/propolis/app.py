@@ -22,7 +22,15 @@ from propolis.core.store import Store
 from propolis.core.sync import Sync
 from propolis.core.triage import Triage
 from propolis.macos import NumberKeys, select_row
-from propolis.views import INBOX, ThreadRow, rows, shortcut_text, sidebar
+from propolis.views import (
+    INBOX,
+    Filters,
+    ThreadRow,
+    filter_options,
+    rows,
+    shortcut_text,
+    sidebar,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +135,14 @@ class Propolis(toga.App):
             tooltip="Forget the saved GitHub sign-in.",
             group=toga.Group.FILE,
         )
+        self.clear_filters_command = toga.Command(
+            self._clear_filters,
+            "Clear Filters",
+            shortcut=toga.Key.MOD_1 + toga.Key.SHIFT + "f",
+            tooltip="Show every thread in the view again. Filters stay set as "
+            "you switch views, and reset when you quit.",
+            group=toga.Group.VIEW,
+        )
         self.shortcuts_command = toga.Command(
             self._show_shortcuts,
             "Keyboard Shortcuts",
@@ -144,9 +160,13 @@ class Propolis(toga.App):
             self.move_up_command,
             self.move_down_command,
             self.sign_out_command,
+            self.clear_filters_command,
             self.shortcuts_command,
         )
         self._shortcuts_window: toga.Window | None = None
+        self._filters = Filters()
+        self._filter_options = None
+        self._updating_filters = False
 
         self.main_window = toga.MainWindow(size=(1200, 800))
         self.main_window.content = toga.Box()
@@ -267,6 +287,7 @@ class Propolis(toga.App):
             self.done_command,
             self.new_label_command,
             self.sign_out_command,
+            self.clear_filters_command,
             *self._label_commands,
         ]:
             command.enabled = signed_in
@@ -316,7 +337,30 @@ class Propolis(toga.App):
             ],
             on_select=self._on_thread_selected,
             on_activate=self._open,
+            style=Pack(flex=1),
         )
+        self.repo_filter, self.reason_filter, self.kind_filter = [
+            toga.Selection(
+                accessor="name", on_change=self._on_filter_changed, style=Pack(flex=1)
+            )
+            for _ in range(3)
+        ]
+        thread_pane = toga.Box(
+            children=[
+                toga.Box(
+                    children=[
+                        self.repo_filter,
+                        self.reason_filter,
+                        self.kind_filter,
+                        toga.Button("Clear", on_press=self._clear_filters),
+                    ],
+                    style=Pack(direction=ROW, gap=8, margin=(6, 8)),
+                ),
+                self.thread_table,
+            ],
+            style=Pack(direction=COLUMN),
+        )
+        self._filter_options = None
         self.web_view = toga.WebView()
         self.web_view.set_content("about:blank", PLACEHOLDER)
         self.status = toga.Label("", style=Pack(margin=(4, 10)))
@@ -328,7 +372,7 @@ class Propolis(toga.App):
                         (
                             toga.SplitContainer(
                                 direction=toga.SplitContainer.HORIZONTAL,
-                                content=[(self.thread_table, 2), (self.web_view, 3)],
+                                content=[(thread_pane, 2), (self.web_view, 3)],
                             ),
                             5,
                         ),
@@ -359,9 +403,11 @@ class Propolis(toga.App):
             for item in items:
                 self.sidebar_data.append({"text": item.text, "view": item.view})
             select_row(self.sidebar_table, views.index(self.view))
-        self._show_rows(rows(self.store, self.view))
+        self._update_filter_options()
+        self._show_rows(rows(self.store, self.view, self._filters))
         name = next(item.name for item in items if item.view == self.view)
-        self.main_window.title = f"{name} – {self.formal_name}"
+        filtered = " (filtered)" if self._filters.active else ""
+        self.main_window.title = f"{name}{filtered} – {self.formal_name}"
         self._enable_view_commands()
 
     def _show_rows(self, new_rows: list[ThreadRow]):
@@ -416,6 +462,59 @@ class Propolis(toga.App):
             self.status.text = f"Last synced at {datetime.now():%H:%M}"
         finally:
             self._syncing = False
+        self._reload()
+
+    # Filters
+
+    def _update_filter_options(self):
+        """Offer the repos, reasons and types among your threads, keeping
+        the current choices where they still exist."""
+        options = filter_options(self.store)
+        if options == self._filter_options:
+            return
+        self._filter_options = options
+        self._updating_filters = True
+        try:
+            repo = self._set_choices(
+                self.repo_filter,
+                "All repos",
+                [(repo, repo) for repo in options.repos],
+                self._filters.repo,
+            )
+            reason = self._set_choices(
+                self.reason_filter, "All reasons", options.reasons, self._filters.reason
+            )
+            kind = self._set_choices(
+                self.kind_filter, "All types", options.kinds, self._filters.kind
+            )
+        finally:
+            self._updating_filters = False
+        self._filters = Filters(repo=repo, reason=reason, kind=kind)
+
+    def _set_choices(self, selection, everything, choices, current):
+        """Set a filter's choices, and select ``current`` if it's still one."""
+        selection.items = [{"name": everything, "value": None}] + [
+            {"name": name, "value": value} for value, name in choices
+        ]
+        for item in selection.items:
+            if item.value == current:
+                selection.value = item
+                return current
+        return None
+
+    def _on_filter_changed(self, widget, **kwargs):
+        if self._updating_filters:
+            return
+        self._filters = Filters(
+            repo=self.repo_filter.value.value,
+            reason=self.reason_filter.value.value,
+            kind=self.kind_filter.value.value,
+        )
+        self._reload()
+
+    def _clear_filters(self, widget=None, **kwargs):
+        self._filters = Filters()
+        self._filter_options = None  # so the choices are set again
         self._reload()
 
     # Thread actions, on the selected thread
@@ -530,8 +629,12 @@ class Propolis(toga.App):
                 ],
             ),
             (
-                "Syncing and help",
-                [describe(self.refresh_command), describe(self.shortcuts_command)],
+                "Filtering, syncing and help",
+                [
+                    describe(self.clear_filters_command),
+                    describe(self.refresh_command),
+                    describe(self.shortcuts_command),
+                ],
             ),
         ]
 
