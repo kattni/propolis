@@ -1,0 +1,2 @@
+# propolis
+GitHub notification organisation.
