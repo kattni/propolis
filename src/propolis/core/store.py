@@ -10,7 +10,9 @@ from propolis.core.events import (
     ActivityDetected,
     Event,
     LabelDefined,
+    LabelDeleted,
     Labelled,
+    LabelsReordered,
     MarkedDone,
     Unlabelled,
     Viewed,
@@ -18,7 +20,7 @@ from propolis.core.events import (
     order,
     to_row,
 )
-from propolis.core.state import State
+from propolis.core.state import ATTENTION, State
 from propolis.core.threads import ThreadInfo
 
 SCHEMA = """
@@ -70,6 +72,17 @@ class Store:
             )
         )
         return label_id
+
+    def delete_label(self, label_id: str) -> None:
+        """Delete a label, taking it off every thread."""
+        if label_id == ATTENTION:
+            raise ValueError("Attention required is built in and can't be deleted.")
+        self._append(LabelDeleted(**self._new(), label_id=label_id))
+
+    def reorder_labels(self, order: list[str]) -> None:
+        """Put the labels in this order. Any not given keep their relative
+        order, after the ones given."""
+        self._append(LabelsReordered(**self._new(), order=list(order)))
 
     def label(self, thread_id: str, label_id: str) -> None:
         self._append(Labelled(**self._new(), thread_id=thread_id, label_id=label_id))

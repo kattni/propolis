@@ -1,5 +1,6 @@
 """What the UI shows, worked out from the Store. Nothing here imports Toga."""
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -95,6 +96,33 @@ def rows(store: Store, view: str) -> list[ThreadRow]:
             )
         )
     return result
+
+
+_KEY_SYMBOLS = {
+    "mod 3": "⌃",
+    "mod 2": "⌥",
+    "shift": "⇧",
+    "mod 1": "⌘",
+    "backspace": "⌫",
+    "up": "↑",
+    "down": "↓",
+}
+_MODIFIER_ORDER = ["mod 3", "mod 2", "shift", "mod 1"]
+
+
+def shortcut_text(shortcut: str | None) -> str:
+    """A Toga shortcut such as ``<mod 1><mod 2><up>``, as macOS shows it: ⌥⌘↑."""
+    if not shortcut:
+        return ""
+    names = re.findall(r"<([^>]+)>", shortcut)
+    key = re.sub(r"<[^>]+>", "", shortcut)
+    modifiers = [name for name in _MODIFIER_ORDER if name in names]
+    keys = [name for name in names if name not in _MODIFIER_ORDER]
+    return "".join(
+        [_KEY_SYMBOLS[name] for name in modifiers]
+        + [_KEY_SYMBOLS.get(name, name.title()) for name in keys]
+        + [key.upper()]
+    )
 
 
 def _format(at: datetime | None) -> str:

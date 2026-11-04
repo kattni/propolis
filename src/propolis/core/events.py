@@ -27,6 +27,18 @@ class LabelDefined(Event):
 
 
 @dataclass(frozen=True, kw_only=True)
+class LabelDeleted(Event):
+    label_id: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class LabelsReordered(Event):
+    """The labels' new order. The latest reorder wins."""
+
+    order: list[str]
+
+
+@dataclass(frozen=True, kw_only=True)
 class Labelled(Event):
     thread_id: str
     label_id: str
@@ -62,6 +74,8 @@ KINDS = {
     kind.__name__: kind
     for kind in (
         LabelDefined,
+        LabelDeleted,
+        LabelsReordered,
         Labelled,
         Unlabelled,
         Viewed,

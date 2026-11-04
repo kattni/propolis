@@ -95,7 +95,12 @@ Scopes:
   | Done | ⌘E |
   | Remove from This View (removes the current view's label) | ⌘⌫ |
   | New Label… (name and "Flag on activity") | ⇧⌘N |
+  | Edit Label… for the label selected in the sidebar: rename, change "Flag on activity", or delete. Delete asks first, and says how many threads go back to the Inbox. Double-clicking a label also opens it. | ⌘I |
+  | Move Label Up / Down, which changes the number keys | ⌥⌘↑ / ⌥⌘↓ |
   | Sign Out of GitHub | |
+  | Keyboard Shortcuts (Help menu) | ⌘/ |
+
+  Each command's description is both its tooltip in the menus and its entry in the Keyboard Shortcuts window, so the two can't drift apart. A note at the bottom of the sidebar says how to open that window. Until a thread is selected, the web view shows a placeholder that follows light and dark mode.
 
   Number keys aren't menu shortcuts: a menu item with a plain-number shortcut can swallow digits typed into text fields, including a comment box in the web view. A local event monitor handles them instead, and only when a list has focus.
 
@@ -109,12 +114,18 @@ Every change is an immutable event recorded in SQLite under `app.paths.data`:
 - done
 - activity detected
 - label created, renamed or configured
+- label deleted
+- labels reordered
 
 Each event has a timestamp and a device ID. Current state (which labels a thread has, and when each was applied) is never stored. It's rebuilt by replaying the events in timestamp order when the store opens, then kept up to date in memory. Attention required isn't an event of its own: replaying "activity detected" on a thread with a flagging label applies it.
 
 This costs little now, and it makes cross-device sync a matter of exchanging events:
 
 - For each thread and label pair, the latest change wins.
+- Deleting a label takes it off every thread. Threads with no other labels go back to the Inbox. A label applied after it was deleted, for example from a device that hadn't yet seen the deletion, is ignored, so no thread can end up under a label that no longer exists.
+- A reorder records the whole order, and the latest reorder wins. Labels it doesn't mention, such as ones another device created meanwhile, keep their relative order after the ones it does.
+- Changing a label's "Flag on activity" affects only activity from then on. Threads that already have the label aren't flagged retroactively.
+- Attention required can't be renamed, moved or deleted. The six default labels can.
 - Activity events carry GitHub's timestamp, not the time Propolis noticed the activity, and their ID is the thread ID plus that timestamp. If two devices detect the same activity, their events collapse into one instead of conflicting.
 
 Because activity carries GitHub's timestamp, it can arrive after events that it precedes, and the store replays the log when that happens. A consequence is that activity which happened before you labelled a thread doesn't flag it, even if Propolis only notices it afterwards.
@@ -135,6 +146,6 @@ macOS desktop first. Because the logic lives in `core`, mobile is mostly UI work
 1. Core model, event log and activity logic, test-first.
 2. GitHub client: device-flow sign-in, notifications sync, timeline checks, write-back.
 3. Toga MVP: Inbox and label views, apply and remove labels, Done, open in browser, manual refresh.
-4. Label management (rename, reorder, delete, flag on activity). Creating labels and background polling arrived early, in phase 3.
+4. Label management: rename, reorder, delete, and flag on activity. Creating labels and background polling arrived early, in phase 3.
 5. Polish: filters by repo, reason and type; an optional `WebView` detail pane.
 6. Cross-device sync, then mobile.

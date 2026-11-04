@@ -7,7 +7,9 @@ from propolis.core.events import (
     ActivityDetected,
     Event,
     LabelDefined,
+    LabelDeleted,
     Labelled,
+    LabelsReordered,
     MarkedDone,
     Unlabelled,
     Viewed,
@@ -68,6 +70,29 @@ class State:
                 self.labels[event.label_id] = Label(
                     event.name, event.flag_on_activity
                 )
+            case LabelDeleted() if event.label_id != ATTENTION:
+                self.labels.pop(event.label_id, None)
+                for thread in self.threads.values():
+                    thread.labels.pop(event.label_id, None)
+            case LabelsReordered():
+                given = [
+                    label_id
+                    for label_id in event.order
+                    if label_id in self.labels and label_id != ATTENTION
+                ]
+                rest = [
+                    label_id
+                    for label_id in self.labels
+                    if label_id not in given and label_id != ATTENTION
+                ]
+                self.labels = {
+                    ATTENTION: self.labels[ATTENTION],
+                    **{label_id: self.labels[label_id] for label_id in given + rest},
+                }
+            case Labelled() if event.label_id not in self.labels:
+                # The label was deleted, perhaps on another device. Applying
+                # it would hide the thread from every view.
+                pass
             case Labelled():
                 thread = self._thread(event.thread_id)
                 # Re-applying a label keeps the thread's original place.

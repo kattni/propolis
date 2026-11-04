@@ -4,6 +4,7 @@ Triage your GitHub notifications with labels that keep their order.
 
 import asyncio
 import logging
+import textwrap
 import webbrowser
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
@@ -12,17 +13,24 @@ from datetime import datetime
 import httpx2
 import toga
 from toga.sources import AccessorColumn, ListSource
-from toga.style.pack import CENTER, COLUMN, ROW, Pack
+from toga.style.pack import CENTER, COLUMN, RIGHT, ROW, Pack
 
 from propolis.core.auth import DeviceCode, SignInError, forget_token, load_token, sign_in
 from propolis.core.github import GitHub
+from propolis.core.state import ATTENTION
 from propolis.core.store import Store
 from propolis.core.sync import Sync
 from propolis.core.triage import Triage
 from propolis.macos import NumberKeys, select_row
-from propolis.views import INBOX, ThreadRow, rows, sidebar
+from propolis.views import INBOX, ThreadRow, rows, shortcut_text, sidebar
 
 logger = logging.getLogger(__name__)
+
+PLACEHOLDER = """<html style="color-scheme: light dark"><body style="
+    font: 13px -apple-system, sans-serif; color: gray;
+    display: grid; place-items: center; height: 90vh; margin: 0">
+Select a thread to read it here.</body></html>"""
+"""What the web view shows before a thread is selected."""
 
 THREAD = toga.Group("Thread", order=22)
 LABELS = toga.Group("Labels", order=25)
@@ -43,36 +51,88 @@ class Propolis(toga.App):
         self._label_commands: list[toga.Command] = []
         self._number_keys = NumberKeys(self._on_number)
 
+        # Each command's tooltip also describes it in the Keyboard Shortcuts
+        # window, so the two can't drift apart.
         self.refresh_command = toga.Command(
             self._refresh,
             "Refresh",
             shortcut=toga.Key.MOD_1 + "r",
+            tooltip="Sync with GitHub now. Propolis also syncs every minute.",
             group=toga.Group.VIEW,
         )
         self.open_command = toga.Command(
             self._open,
             "Open in Browser",
             shortcut=toga.Key.MOD_1 + "o",
+            tooltip="Open the selected thread in your browser. "
+            "Double-clicking a thread does the same.",
             group=THREAD,
         )
         self.done_command = toga.Command(
-            self._done, "Done", shortcut=toga.Key.MOD_1 + "e", group=THREAD
+            self._done,
+            "Done",
+            shortcut=toga.Key.MOD_1 + "e",
+            tooltip="Take the selected thread out of every view, and mark it done "
+            "on GitHub. Activity from someone else brings it back to the Inbox.",
+            group=THREAD,
         )
         self.unlabel_command = toga.Command(
             self._unlabel,
             "Remove from This View",
             shortcut=toga.Key.MOD_1 + toga.Key.BACKSPACE,
+            tooltip="Take this view's label off the selected thread. In Attention "
+            "required, this is how you say you've dealt with it.",
             group=THREAD,
         )
         self.new_label_command = toga.Command(
             self._new_label,
             "New Label…",
             shortcut=toga.Key.MOD_1 + toga.Key.SHIFT + "n",
+            tooltip="Create a label, and choose whether activity flags its threads "
+            "for attention.",
             group=LABELS,
             section=1,
         )
+        self.edit_label_command = toga.Command(
+            self._edit_label,
+            "Edit Label…",
+            shortcut=toga.Key.MOD_1 + "i",
+            tooltip="Rename, reconfigure or delete the label selected in the "
+            "sidebar. Double-clicking a label does the same.",
+            group=LABELS,
+            section=1,
+            order=1,
+        )
+        self.move_up_command = toga.Command(
+            lambda command, **kwargs: self._move_label(-1),
+            "Move Label Up",
+            shortcut=toga.Key.MOD_1 + toga.Key.MOD_2 + toga.Key.UP,
+            tooltip="Move the selected label up the sidebar, changing its number.",
+            group=LABELS,
+            section=1,
+            order=2,
+        )
+        self.move_down_command = toga.Command(
+            lambda command, **kwargs: self._move_label(1),
+            "Move Label Down",
+            shortcut=toga.Key.MOD_1 + toga.Key.MOD_2 + toga.Key.DOWN,
+            tooltip="Move the selected label down the sidebar, changing its number.",
+            group=LABELS,
+            section=1,
+            order=3,
+        )
         self.sign_out_command = toga.Command(
-            self._sign_out, "Sign Out of GitHub", group=toga.Group.FILE
+            self._sign_out,
+            "Sign Out of GitHub",
+            tooltip="Forget the saved GitHub sign-in.",
+            group=toga.Group.FILE,
+        )
+        self.shortcuts_command = toga.Command(
+            self._show_shortcuts,
+            "Keyboard Shortcuts",
+            shortcut=toga.Key.MOD_1 + "/",
+            tooltip="Show this list.",
+            group=toga.Group.HELP,
         )
         self.commands.add(
             self.refresh_command,
@@ -80,8 +140,13 @@ class Propolis(toga.App):
             self.done_command,
             self.unlabel_command,
             self.new_label_command,
+            self.edit_label_command,
+            self.move_up_command,
+            self.move_down_command,
             self.sign_out_command,
+            self.shortcuts_command,
         )
+        self._shortcuts_window: toga.Window | None = None
 
         self.main_window = toga.MainWindow(size=(1200, 800))
         self.main_window.content = toga.Box()
@@ -149,7 +214,7 @@ class Propolis(toga.App):
             token = await sign_in(self._show_code)
         except (SignInError, httpx2.HTTPError) as error:
             await self.main_window.dialog(
-                toga.dialogs.ErrorDialog("Couldn't sign in", str(error))
+                toga.ErrorDialog("Couldn't sign in", str(error))
             )
             self._show_sign_in()
             return
@@ -205,7 +270,18 @@ class Propolis(toga.App):
             *self._label_commands,
         ]:
             command.enabled = signed_in
+        self._enable_view_commands(signed_in)
+
+    def _enable_view_commands(self, signed_in: bool = True):
+        """Commands that depend on the selected view."""
         self.unlabel_command.enabled = signed_in and self.view != INBOX
+        editable = signed_in and self.view not in (INBOX, ATTENTION)
+        for command in [
+            self.edit_label_command,
+            self.move_up_command,
+            self.move_down_command,
+        ]:
+            command.enabled = editable
 
     # The main window
 
@@ -216,6 +292,20 @@ class Propolis(toga.App):
             data=self.sidebar_data,
             show_headings=False,
             on_select=self._on_view_selected,
+            on_activate=self._edit_label,
+            style=Pack(flex=1),
+        )
+        shortcuts = shortcut_text(self.shortcuts_command.shortcut)
+        sidebar_box = toga.Box(
+            children=[
+                self.sidebar_table,
+                toga.Divider(),
+                toga.Label(
+                    f"Press {shortcuts} for keyboard shortcuts",
+                    style=Pack(margin=(6, 10), font_size=11),
+                ),
+            ],
+            style=Pack(direction=COLUMN),
         )
         self.thread_table = toga.Table(
             columns=[
@@ -228,12 +318,13 @@ class Propolis(toga.App):
             on_activate=self._open,
         )
         self.web_view = toga.WebView()
+        self.web_view.set_content("about:blank", PLACEHOLDER)
         self.status = toga.Label("", style=Pack(margin=(4, 10)))
         self.main_window.content = toga.Box(
             children=[
                 toga.SplitContainer(
                     content=[
-                        (self.sidebar_table, 1),
+                        (sidebar_box, 1),
                         (
                             toga.SplitContainer(
                                 direction=toga.SplitContainer.HORIZONTAL,
@@ -252,18 +343,26 @@ class Propolis(toga.App):
     def _reload(self):
         """Bring the sidebar and thread list up to date with the Store."""
         items = sidebar(self.store)
+        views = [item.view for item in items]
+        if self.view not in views:
+            # The label being viewed was deleted.
+            self.view = INBOX
         self._numbered = {item.number: item.view for item in items if item.number}
         # Update rows in place where possible, so selections survive.
-        existing = {row.view: row for row in self.sidebar_data}
-        for item in items:
-            if row := existing.get(item.view):
-                row.text = item.text
-            else:
+        if [row.view for row in self.sidebar_data] == views:
+            for row, item in zip(self.sidebar_data, items):
+                if row.text != item.text:
+                    row.text = item.text
+        else:
+            # Labels were added, deleted or reordered.
+            self.sidebar_data.clear()
+            for item in items:
                 self.sidebar_data.append({"text": item.text, "view": item.view})
+            select_row(self.sidebar_table, views.index(self.view))
         self._show_rows(rows(self.store, self.view))
         name = next(item.name for item in items if item.view == self.view)
         self.main_window.title = f"{name} – {self.formal_name}"
-        self.unlabel_command.enabled = self.view != INBOX
+        self._enable_view_commands()
 
     def _show_rows(self, new_rows: list[ThreadRow]):
         data = self.thread_table.data
@@ -350,7 +449,7 @@ class Propolis(toga.App):
             view = self.view
             await self._act_on_selection(lambda key: self.triage.unlabel(key, view))
 
-    # Labels
+    # Applying labels
 
     def _on_number(self, number: int) -> bool:
         """Apply the label with this number to the selected thread."""
@@ -386,32 +485,166 @@ class Propolis(toga.App):
 
         return apply
 
-    def _new_label(self, command, **kwargs):
-        name = toga.TextInput(placeholder="Label name", style=Pack(flex=1))
-        flag = toga.Switch("Flag on activity")
-        window = toga.Window(title="New Label", size=(360, 150), resizable=False)
+    # Help
 
-        def create(widget, **kwargs):
+    def _show_shortcuts(self, command=None, **kwargs):
+        if self._shortcuts_window in self.windows:
+            self._shortcuts_window.show()
+            return
+
+        def describe(command: toga.Command):
+            return (shortcut_text(command.shortcut), command.text, command.tooltip)
+
+        sections = [
+            (
+                "Triage",
+                [
+                    (
+                        "1 – 9",
+                        "Apply a label",
+                        "Apply that label to the selected thread, then move to the "
+                        "next one. Works while the thread list or sidebar has "
+                        "focus. Each label's number is shown beside it.",
+                    ),
+                    (
+                        "↑ ↓",
+                        "Move between threads",
+                        "The selected thread shows below the list, which counts "
+                        "as viewing it.",
+                    ),
+                    describe(self.done_command),
+                    describe(self.unlabel_command),
+                    describe(self.open_command),
+                ],
+            ),
+            (
+                "Labels",
+                [
+                    describe(command)
+                    for command in [
+                        self.new_label_command,
+                        self.edit_label_command,
+                        self.move_up_command,
+                        self.move_down_command,
+                    ]
+                ],
+            ),
+            (
+                "Syncing and help",
+                [describe(self.refresh_command), describe(self.shortcuts_command)],
+            ),
+        ]
+
+        children = []
+        for heading, entries in sections:
+            children.append(
+                toga.Label(heading, style=Pack(font_weight="bold", font_size=14))
+            )
+            for keys, title, description in entries:
+                children.append(
+                    toga.Box(
+                        children=[
+                            toga.Label(
+                                keys,
+                                style=Pack(width=70, text_align=RIGHT, font_weight="bold"),
+                            ),
+                            toga.Box(
+                                children=[
+                                    toga.Label(title, style=Pack(font_weight="bold")),
+                                    toga.Label(textwrap.fill(description, 62)),
+                                ],
+                                style=Pack(direction=COLUMN, flex=1, gap=2),
+                            ),
+                        ],
+                        style=Pack(direction=ROW, gap=14),
+                    )
+                )
+
+        window = toga.Window(title="Keyboard Shortcuts", size=(560, 620))
+        window.content = toga.ScrollContainer(
+            horizontal=False,
+            content=toga.Box(
+                children=children, style=Pack(direction=COLUMN, margin=20, gap=12)
+            ),
+        )
+        self._shortcuts_window = window
+        window.show()
+
+    # Labels
+
+    def _labels_changed(self):
+        self._rebuild_label_commands()
+        self._reload()
+
+    def _new_label(self, command, **kwargs):
+        self._show_label_window()
+
+    def _edit_label(self, widget=None, **kwargs):
+        if self.view not in (INBOX, ATTENTION):
+            self._show_label_window(self.view)
+
+    def _move_label(self, offset: int):
+        order = [label_id for label_id in self.store.state.labels if label_id != ATTENTION]
+        if self.view not in order:
+            return
+        index = order.index(self.view)
+        if 0 <= index + offset < len(order):
+            order.insert(index + offset, order.pop(index))
+            self.store.reorder_labels(order)
+            self._labels_changed()
+
+    def _show_label_window(self, label_id: str | None = None):
+        """The New Label window, or with ``label_id``, the Edit Label window."""
+        label = self.store.state.labels[label_id] if label_id else None
+        name = toga.TextInput(
+            value=label.name if label else "",
+            placeholder="Label name",
+            style=Pack(flex=1),
+        )
+        flag = toga.Switch(
+            "Flag on activity", value=label.flag_on_activity if label else False
+        )
+        window = toga.Window(
+            title="Edit Label" if label else "New Label",
+            size=(380, 150),
+            resizable=False,
+        )
+
+        def save(widget, **kwargs):
             if text := name.value.strip():
-                self.store.define_label(text, flag_on_activity=flag.value)
-                self._rebuild_label_commands()
-                self._reload()
+                self.store.define_label(
+                    text, flag_on_activity=flag.value, label_id=label_id
+                )
+                self._labels_changed()
             window.close()
 
+        async def delete(widget, **kwargs):
+            count = len(self.store.state.labelled(label_id))
+            threads = f"{count} thread{'' if count == 1 else 's'}"
+            message = (
+                f"Its {threads} will go back to the Inbox, unless they have "
+                "other labels."
+                if count
+                else "No threads have this label."
+            )
+            if await window.dialog(
+                toga.ConfirmDialog(f"Delete “{label.name}”?", message)
+            ):
+                self.store.delete_label(label_id)
+                self._labels_changed()
+                window.close()
+
+        buttons = [toga.Button("Delete…", on_press=delete)] if label else []
+        buttons += [
+            toga.Box(style=Pack(flex=1)),
+            toga.Button("Cancel", on_press=lambda widget, **kwargs: window.close()),
+            toga.Button("Save" if label else "Create", on_press=save),
+        ]
         window.content = toga.Box(
             children=[
                 name,
                 flag,
-                toga.Box(
-                    children=[
-                        toga.Box(style=Pack(flex=1)),
-                        toga.Button(
-                            "Cancel", on_press=lambda widget, **kwargs: window.close()
-                        ),
-                        toga.Button("Create", on_press=create),
-                    ],
-                    style=Pack(direction=ROW, gap=8),
-                ),
+                toga.Box(children=buttons, style=Pack(direction=ROW, gap=8)),
             ],
             style=Pack(direction=COLUMN, margin=16, gap=12),
         )

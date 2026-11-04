@@ -76,6 +76,37 @@ def test_done_clears_labels_until_new_activity(store, clock):
     assert store.state.inbox() == ["a", "b"]
 
 
+def test_labels_can_be_renamed_reordered_and_deleted(store, clock):
+    store.record_activity("a", clock())
+    store.label("a", "low-priority")
+
+    store.define_label("Someday", label_id="low-priority")
+    # Labels missing from the new order, such as ones another device just
+    # created, keep their relative order after the ones given.
+    store.reorder_labels(["high-priority", "low-priority"])
+    assert list(store.state.labels) == [
+        ATTENTION,
+        "high-priority",
+        "low-priority",
+        "needs-review",
+        "question",
+        "deep-response",
+        "blocked",
+    ]
+    assert store.state.labels["low-priority"].name == "Someday"
+
+    store.delete_label("low-priority")
+    # For example, from a device that hadn't yet seen the deletion.
+    store.label("b", "low-priority")
+
+    assert "low-priority" not in store.state.labels
+    assert store.state.inbox() == ["a"]
+    in_use = {label for thread in store.state.threads.values() for label in thread.labels}
+    assert in_use <= store.state.labels.keys()
+    with Store(store.path) as reopened:
+        assert reopened.state == store.state
+
+
 def test_reopening_rebuilds_the_same_state(store, clock):
     urgent = store.define_label("High priority", flag_on_activity=True)
     before_labelling = clock()
