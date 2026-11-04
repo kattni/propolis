@@ -23,6 +23,24 @@ class Label:
     flag_on_activity: bool = False
 
 
+def _built_in_labels() -> dict[str, Label]:
+    """The labels every Store starts with.
+
+    They're part of the starting state rather than events, so every device has
+    them from the start and syncing can't duplicate them. Reconfiguring one is
+    an ordinary ``LabelDefined`` event with the same ID.
+    """
+    return {
+        ATTENTION: Label("Attention required"),
+        "needs-review": Label("Needs review"),
+        "question": Label("Question"),
+        "deep-response": Label("Deep response"),
+        "blocked": Label("Blocked", flag_on_activity=True),
+        "low-priority": Label("Low priority"),
+        "high-priority": Label("High priority", flag_on_activity=True),
+    }
+
+
 @dataclass
 class ThreadState:
     labels: dict[str, datetime] = field(default_factory=dict)
@@ -41,9 +59,7 @@ class ThreadState:
 
 @dataclass
 class State:
-    labels: dict[str, Label] = field(
-        default_factory=lambda: {ATTENTION: Label("Attention required")}
-    )
+    labels: dict[str, Label] = field(default_factory=_built_in_labels)
     threads: dict[str, ThreadState] = field(default_factory=dict)
 
     def apply(self, event: Event) -> None:

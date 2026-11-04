@@ -75,6 +75,8 @@ class GitHub:
             transport=transport,
             timeout=30,
         )
+        self.poll_interval = 60
+        """How many seconds GitHub asks clients to wait between polls."""
 
     async def __aenter__(self) -> "GitHub":
         return self
@@ -104,6 +106,8 @@ class GitHub:
         response = await self._http.get(
             "/notifications", params=params, headers=headers
         )
+        if interval := response.headers.get("X-Poll-Interval"):
+            self.poll_interval = int(interval)
         if response.status_code == 304:
             return None, last_modified
         response.raise_for_status()

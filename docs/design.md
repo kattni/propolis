@@ -15,6 +15,17 @@ A label has one behaviour setting:
 
 Users never write rules. Behaviour is configured only through this per-label setting.
 
+**Default labels.** Propolis comes with six labels, in this order. They're part of the Store's starting state, not events, so every device has them from the start and syncing can't duplicate them.
+
+| Label | Flag on activity |
+|---|---|
+| Needs review | |
+| Question | |
+| Deep response | |
+| Blocked | ✓ Activity may mean it's unblocked. |
+| Low priority | |
+| High priority | ✓ |
+
 **Built-in views:**
 
 - **Inbox**: threads with no labels, most recent activity first. Applying any label is the triage step, and it takes the thread out of the Inbox.
@@ -65,7 +76,30 @@ Scopes:
 
 - `propolis.core`: pure Python with no Toga imports. It holds the domain model, storage, the activity logic, sync, triage with write-back, sign-in, and the GitHub client (async `httpx2`). It's developed test-first with pytest, at a few agreed seams. GitHub interactions are tested against a fake GitHub (`httpx2.MockTransport` serving small hand-written JSON), never the live API.
 - Thread details from GitHub (title, link, notification ID, how far each thread has been checked) are cached in the same SQLite database. They aren't events and aren't synced: each device fetches its own.
-- `propolis.app` and the UI modules: Toga only. A `SplitContainer` has a sidebar of views on the left and a `Table` of threads on the right. Actions are `Command`s with keyboard shortcuts. Polling runs on Toga's asyncio loop, respecting GitHub's `X-Poll-Interval` and using `If-Modified-Since`.
+- `propolis.views`: pure Python with no Toga imports. It turns the Store's state into what the UI shows, and it's tested. This is where the UI's logic lives:
+  - the sidebar's views, each with its number key, its thread count and how many have new activity, shown as "4   Blocked  (3, 1 new)";
+  - each thread's row: title with a ● for new activity, repo, type, and when.
+- `propolis.app`: Toga only, and kept to wiring, so it has no tests; it's checked by running it.
+  - Without a token in the keychain, the window shows the device-flow code and a button that opens GitHub. If GitHub rejects the token, the app forgets it and shows sign-in again.
+  - Otherwise, the window has a sidebar of views on the left. On the right, the thread list sits above a web view showing the selected thread's GitHub page, so you can read and reply without leaving the app. A status line shows the last sync.
+  - Selecting a thread counts as viewing it: its ● goes, and it's marked read on GitHub.
+  - After you label, unlabel or finish a thread, the thread that takes its place is selected, so you can keep triaging from the keyboard.
+  - The web view has its own cookies, so to comment you sign in to GitHub inside it once. That sign-in survives quitting and reopening the app, confirmed under `briefcase dev`.
+- `propolis.macos`: what Toga doesn't offer yet, and a no-op on other platforms. It has a key-event monitor for plain number keys, and selects table rows through `NSTableView`.
+
+  | Command | Shortcut |
+  |---|---|
+  | Apply label *n*. The default labels come first, then yours in the order you created them. The number shows in the sidebar and the Labels menu. | 1 to 9, while the thread list or sidebar has focus |
+  | Refresh (sync now) | ⌘R |
+  | Open in Browser (also double-click), which marks it viewed | ⌘O |
+  | Done | ⌘E |
+  | Remove from This View (removes the current view's label) | ⌘⌫ |
+  | New Label… (name and "Flag on activity") | ⇧⌘N |
+  | Sign Out of GitHub | |
+
+  Number keys aren't menu shortcuts: a menu item with a plain-number shortcut can swallow digits typed into text fields, including a comment box in the web view. A local event monitor handles them instead, and only when a list has focus.
+
+  The app syncs when it starts, then in the background on Toga's asyncio loop, as often as GitHub's `X-Poll-Interval` allows (currently 60 seconds). Refresh syncs at once. Each background sync is one conditional notifications request, which costs nothing against the rate limit when nothing has changed, plus the CI query. When a sync changes the list, the selected thread stays selected. If a background sync fails, the status line says so and polling carries on.
 
 ### Event-sourced storage
 
@@ -101,6 +135,6 @@ macOS desktop first. Because the logic lives in `core`, mobile is mostly UI work
 1. Core model, event log and activity logic, test-first.
 2. GitHub client: device-flow sign-in, notifications sync, timeline checks, write-back.
 3. Toga MVP: Inbox and label views, apply and remove labels, Done, open in browser, manual refresh.
-4. Label management (create, rename, reorder, flag on activity) and background polling.
+4. Label management (rename, reorder, delete, flag on activity). Creating labels and background polling arrived early, in phase 3.
 5. Polish: filters by repo, reason and type; an optional `WebView` detail pane.
 6. Cross-device sync, then mobile.
