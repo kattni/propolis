@@ -14,6 +14,15 @@ INBOX = "inbox"
 NEW_ACTIVITY = "● "
 
 _KINDS = {"PullRequest": "Pull request"}
+_ICONS = {
+    "Issue": "issue-opened",
+    "PullRequest": "git-pull-request",
+    "Discussion": "comment-discussion",
+    "Release": "tag",
+    "Commit": "git-commit",
+    "CheckSuite": "workflow",
+}
+"""GitHub's Octicon for each type of thread. Any other type gets a bell."""
 
 REASONS = {
     "approval_requested": "Approval requested",
@@ -62,6 +71,8 @@ class ThreadRow:
     title: str
     repo: str
     kind: str
+    icon: str
+    """The name of the Octicon for its type, such as ``git-pull-request``."""
     when: str
     """In the Inbox, the latest activity. In a label, when it was applied."""
     url: str | None
@@ -167,6 +178,7 @@ def rows(store: Store, view: str, filters: Filters = Filters()) -> list[ThreadRo
                 title=f"{NEW_ACTIVITY}{title}" if thread.new_activity else title,
                 repo=info.repo if info else "",
                 kind=_KINDS.get(info.kind, info.kind) if info else "",
+                icon=_ICONS.get(info.kind, "bell") if info else "bell",
                 when=_format(when),
                 url=info.url if info else None,
             )

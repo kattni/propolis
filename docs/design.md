@@ -82,7 +82,7 @@ Scopes:
 - Thread details from GitHub (title, link, notification ID, GitHub's latest reason for notifying you, how far each thread has been checked) are cached in the same SQLite database. They aren't events and aren't synced: each device fetches its own. The startup sync's read of the whole inbox refreshes them, so when the details gain a field, existing threads catch up the next time Propolis starts. A pull request known only through CI polling has the reason "Failing CI".
 - `propolis.views`: pure Python with no Toga imports. It turns the Store's state into what the UI shows, and it's tested. This is where the UI's logic lives:
   - the sidebar's views, each with its number key, its thread count and how many have new activity, shown as "4   Blocked  (3, 1 new)";
-  - each thread's row: title with a ● for new activity, repo, type, and when;
+  - each thread's row: its type as GitHub's Octicon (pull request, issue, discussion, release, commit, CI run, or a bell for anything else), title with a ● for new activity, repo, and when;
   - filtering: the repos, reasons and types to offer, and the rows that match.
 - `propolis.app`: Toga only, and kept to wiring, so it has no tests; it's checked by running it.
   - Without a token in the keychain, the window shows the device-flow code and a button that opens GitHub. If GitHub rejects the token, the app forgets it and shows sign-in again.
@@ -90,7 +90,7 @@ Scopes:
   - Selecting a thread counts as viewing it: its ● goes, and it's marked read on GitHub.
   - After you label, unlabel or finish a thread, the thread that takes its place is selected, so you can keep triaging from the keyboard.
   - The web view has its own cookies, so to comment you sign in to GitHub inside it once. That sign-in survives quitting and reopening the app, confirmed under `briefcase dev`.
-- `propolis.macos`: what Toga doesn't offer yet, and a no-op on other platforms. It has a key-event monitor for plain number keys and Delete, and selects table rows through `NSTableView`. A menu shortcut with no modifier would take that key from text fields too, so these keys only act while a list has focus. It also turns off macOS's window tabs, which would otherwise add Show Tab Bar and Show All Tabs to the View menu.
+- `propolis.macos`: what Toga doesn't offer yet, and a no-op on other platforms. It has a key-event monitor for plain number keys and Delete, and selects table rows through `NSTableView`. A menu shortcut with no modifier would take that key from text fields too, so these keys only act while a list has focus. It makes the Octicons template images, so macOS draws them in the text colour for light mode, dark mode and selected rows, gives the icon column a fixed width, and turns off macOS's window tabs, which would otherwise add Show Tab Bar and Show All Tabs to the View menu.
 
   | Command | Shortcut |
   |---|---|

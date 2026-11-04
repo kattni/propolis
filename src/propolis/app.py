@@ -9,6 +9,7 @@ import webbrowser
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from datetime import datetime
+from pathlib import Path
 
 import httpx2
 import toga
@@ -21,7 +22,14 @@ from propolis.core.state import ATTENTION
 from propolis.core.store import Store
 from propolis.core.sync import Sync
 from propolis.core.triage import Triage
-from propolis.macos import ListKeys, disable_window_tabs, has_focus, select_row
+from propolis.macos import (
+    ListKeys,
+    disable_window_tabs,
+    fix_column_width,
+    has_focus,
+    select_row,
+    template_icon,
+)
 from propolis.views import (
     INBOX,
     Filters,
@@ -33,6 +41,27 @@ from propolis.views import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+OCTICONS = Path(__file__).parent / "resources" / "octicons"
+
+
+class TypeColumn(AccessorColumn):
+    """Each thread's type, shown as GitHub's icon for it rather than in words."""
+
+    def __init__(self):
+        super().__init__("", "icon")
+        self._icons: dict[str, toga.Icon] = {}
+
+    def icon(self, row) -> toga.Icon:
+        # One icon per type, so each can carry its type's name for VoiceOver.
+        if row.kind not in self._icons:
+            icon = toga.Icon(OCTICONS / row.icon)
+            self._icons[row.kind] = template_icon(icon, row.kind or "Thread")
+        return self._icons[row.kind]
+
+    def text(self, row, default: str | None = None) -> str | None:
+        return default
 
 PLACEHOLDER = """<html style="color-scheme: light dark"><body style="
     font: 13px -apple-system, sans-serif; color: gray;
@@ -334,15 +363,16 @@ class Propolis(toga.App):
         )
         self.thread_table = toga.Table(
             columns=[
+                TypeColumn(),
                 AccessorColumn("Title", "title"),
                 AccessorColumn("Repo", "repo"),
-                AccessorColumn("Type", "kind"),
                 AccessorColumn("When", "when"),
             ],
             on_select=self._on_thread_selected,
             on_activate=self._open,
             style=Pack(flex=1),
         )
+        fix_column_width(self.thread_table, 0, 22)
         self.repo_filter, self.reason_filter, self.kind_filter = [
             toga.Selection(
                 accessor="name", on_change=self._on_filter_changed, style=Pack(flex=1)

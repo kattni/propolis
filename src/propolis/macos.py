@@ -101,6 +101,29 @@ def disable_window_tabs() -> None:
         NSWindow.setAllowsAutomaticWindowTabbing(False)
 
 
+def template_icon(icon: toga.Icon, description: str) -> toga.Icon:
+    """Make an icon a template image, which macOS draws in the text colour:
+    dark in light mode, light in dark mode, and white on a selected row.
+
+    ``description`` is what VoiceOver reads for it.
+    """
+    if _MACOS:
+        icon._impl.native.setTemplate(True)
+        icon._impl.native.accessibilityDescription = description
+    return icon
+
+
+def fix_column_width(table: toga.Table, index: int, width: float) -> None:
+    """Give a column of a Toga ``Table`` a fixed width, which Toga can't do yet.
+    The other columns share the rest."""
+    if _MACOS:
+        column = table._impl.columns[index]
+        column.minWidth = width
+        column.maxWidth = width
+        column.width = width
+        column.resizingMask = 0  # NSTableColumnNoResizing
+
+
 def select_row(table: toga.Table, index: int) -> None:
     """Select and reveal a row of a Toga ``Table``, which Toga can't do yet."""
     if _MACOS:
