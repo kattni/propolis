@@ -11,7 +11,7 @@ Propolis is a BeeWare app for triaging GitHub notifications. You file notificati
 A label has one behaviour setting:
 
 - **Flag on activity**: when someone else acts on a thread with this label, Propolis applies the *Attention required* label to it. Example: "High priority".
-- Otherwise, activity leaves the thread where it is and shows a "new activity" marker on it. Example: "Needs deep analysis".
+- Otherwise, activity leaves the thread where it is and shows a "new activity" marker on it. Example: "Needs deep analysis". Viewing or labelling the thread clears the marker.
 
 Users never write rules. Behaviour is configured only through this per-label setting.
 
@@ -62,16 +62,19 @@ Scopes:
 
 Every change is an immutable event recorded in SQLite under `app.paths.data`:
 - label added or removed
+- thread viewed
 - done
-- attention flagged
+- activity detected
 - label created, renamed or configured
 
-Each event has a timestamp and a device ID. Current state (which labels a thread has, and when each was applied) is derived from the events and cached in SQLite tables.
+Each event has a timestamp and a device ID. Current state (which labels a thread has, and when each was applied) is never stored. It's rebuilt by replaying the events in timestamp order when the store opens, then kept up to date in memory. Attention required isn't an event of its own: replaying "activity detected" on a thread with a flagging label applies it.
 
 This costs little now, and it makes cross-device sync a matter of exchanging events:
 
 - For each thread and label pair, the latest change wins.
-- Automatically generated events get deterministic IDs (for example, attention flagged = thread ID plus the GitHub timestamp). If two devices both detect the same activity, their events collapse into one instead of conflicting.
+- Activity events carry GitHub's timestamp, not the time Propolis noticed the activity, and their ID is the thread ID plus that timestamp. If two devices detect the same activity, their events collapse into one instead of conflicting.
+
+Because activity carries GitHub's timestamp, it can arrive after events that it precedes, and the store replays the log when that happens. A consequence is that activity which happened before you labelled a thread doesn't flag it, even if Propolis only notices it afterwards.
 
 ## Sync (later)
 
