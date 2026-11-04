@@ -15,7 +15,7 @@ A label has one behaviour setting:
 
 Users never write rules. Behaviour is configured only through this per-label setting.
 
-**Default labels.** Propolis comes with six labels, in this order. They're part of the Store's starting state, not events, so every device has them from the start and syncing can't duplicate them.
+**Default labels.** Propolis comes with eight labels, in this order. They're part of the Store's starting state, not events, so every device has them from the start and syncing can't duplicate them.
 
 | Label | Flag on activity |
 |---|---|
@@ -25,10 +25,12 @@ Users never write rules. Behaviour is configured only through this per-label set
 | Blocked | ✓ Activity may mean it's unblocked. |
 | Low priority | |
 | High priority | ✓ |
+| In progress | |
+| Cold storage | |
 
 **Built-in views:**
 
-- **Inbox**: threads with no labels, most recent activity first. Applying any label is the triage step, and it takes the thread out of the Inbox.
+- **Inbox**: threads with no labels, most recent activity first. Everything in your GitHub inbox starts here. Applying any label is the triage step, and it takes the thread out of the Inbox.
 - **Attention required**: a built-in label that Propolis applies automatically. The thread keeps its other labels and its place in each of them. Removing the label means "dealt with it".
 
 **Done**: removes all labels from a thread and marks it done on GitHub. If someone else later acts on it, it comes back to the Inbox.
@@ -45,13 +47,15 @@ Only activity that needs a response from you counts:
 
 How activity is detected: Propolis polls `/notifications?all=true` with `since` and `If-Modified-Since`, so a poll where nothing has changed costs nothing against the rate limit. The notifications API only says that a thread's `updated_at` changed, not what changed. When it moves forward, Propolis fetches the thread's timeline (`/repos/{owner}/{repo}/issues/{n}/timeline`, which covers pull requests too) and looks at events since its last check.
 
-The first time Propolis sees a thread, it trusts GitHub's `unread` flag. A read thread starts with nothing new. An unread one is checked from its `last_read_at`, or from the beginning if that's missing. `last_read_at` alone is unreliable: GitHub marks threads read in bulk without setting it. On a real account with 160 notifications, the first sync cost 20 REST requests and put 19 threads in the Inbox.
+Every thread in your GitHub inbox that Propolis hasn't placed yet goes in the Inbox, whoever acted on it and whether or not you've read it. "Placed" means it has any event: it's labelled, done, or already in the Inbox. Propolis records an `ActivityDetected` event at the thread's `updated_at`, so the Inbox keeps GitHub's order. A thread that's read on GitHub also gets a `Viewed` event at that time, so it starts with nothing new. Propolis doesn't fetch the timeline of a thread it's placing. The rules above apply to threads once they're placed: whether a labelled thread is flagged, and whether a done one comes back.
+
+The first sync after Propolis starts reads the whole inbox, without `since` or `If-Modified-Since`. GitHub can list a thread after polls have moved past its `updated_at`, for example one moved back to the inbox after being marked done, and an incremental poll would never see it. Threads you've placed keep their place, even if GitHub still lists them. On a real account, the first startup sync with this rule took the Inbox from 17 threads to 169, 20 of them new, for 4 pages of notifications and 4 other REST requests. Replaying the event log as each one was placed took 0.2 seconds in total.
 
 A CI failure doesn't update the pull request's notification thread, so Propolis polls for it separately:
 - One GraphQL query finds your open pull requests and reads the check runs and commit statuses on each one's latest commit.
 - A failure counts as activity on the pull request itself, at the time the check completed, so flagging labels work for CI just as they do for comments.
 - This covers checks outside GitHub Actions too, such as pre-commit.ci or Read the Docs builds.
-- Propolis skips GitHub's own `ci_activity` notification threads, so a failure doesn't appear twice.
+- GitHub's own `ci_activity` notification threads are placed in the Inbox like the rest of your GitHub inbox, but their updates never count as activity, so a failure isn't flagged twice.
 
 ## Writing back to GitHub
 
@@ -75,7 +79,7 @@ Scopes:
 ## Architecture
 
 - `propolis.core`: pure Python with no Toga imports. It holds the domain model, storage, the activity logic, sync, triage with write-back, sign-in, and the GitHub client (async `httpx2`). It's developed test-first with pytest, at a few agreed seams. GitHub interactions are tested against a fake GitHub (`httpx2.MockTransport` serving small hand-written JSON), never the live API.
-- Thread details from GitHub (title, link, notification ID, GitHub's latest reason for notifying you, how far each thread has been checked) are cached in the same SQLite database. They aren't events and aren't synced: each device fetches its own. When the details gain a field, a cache version makes the next sync refetch every notification once, so existing threads catch up. That costs pages of notifications, but no timelines. A pull request known only through CI polling has the reason "Failing CI".
+- Thread details from GitHub (title, link, notification ID, GitHub's latest reason for notifying you, how far each thread has been checked) are cached in the same SQLite database. They aren't events and aren't synced: each device fetches its own. The startup sync's read of the whole inbox refreshes them, so when the details gain a field, existing threads catch up the next time Propolis starts. A pull request known only through CI polling has the reason "Failing CI".
 - `propolis.views`: pure Python with no Toga imports. It turns the Store's state into what the UI shows, and it's tested. This is where the UI's logic lives:
   - the sidebar's views, each with its number key, its thread count and how many have new activity, shown as "4   Blocked  (3, 1 new)";
   - each thread's row: title with a ● for new activity, repo, type, and when;
@@ -86,15 +90,15 @@ Scopes:
   - Selecting a thread counts as viewing it: its ● goes, and it's marked read on GitHub.
   - After you label, unlabel or finish a thread, the thread that takes its place is selected, so you can keep triaging from the keyboard.
   - The web view has its own cookies, so to comment you sign in to GitHub inside it once. That sign-in survives quitting and reopening the app, confirmed under `briefcase dev`.
-- `propolis.macos`: what Toga doesn't offer yet, and a no-op on other platforms. It has a key-event monitor for plain number keys, and selects table rows through `NSTableView`.
+- `propolis.macos`: what Toga doesn't offer yet, and a no-op on other platforms. It has a key-event monitor for plain number keys and Delete, and selects table rows through `NSTableView`. A menu shortcut with no modifier would take that key from text fields too, so these keys only act while a list has focus. It also turns off macOS's window tabs, which would otherwise add Show Tab Bar and Show All Tabs to the View menu.
 
   | Command | Shortcut |
   |---|---|
   | Apply label *n*. The default labels come first, then yours in the order you created them. The number shows in the sidebar and the Labels menu. | 1 to 9, while the thread list or sidebar has focus |
   | Refresh (sync now) | ⌘R |
   | Open in Browser (also double-click), which marks it viewed | ⌘O |
-  | Done | ⌘E |
-  | Remove from This View (removes the current view's label) | ⌘⌫ |
+  | Done | ⌘D |
+  | Remove from This View (removes the current view's label). The Inbox has no label to remove, so there Delete means Done. | Delete, while the thread list has focus |
   | New Label… (name and "Flag on activity") | ⇧⌘N |
   | Edit Label… for the label selected in the sidebar: rename, change "Flag on activity", or delete. Delete asks first, and says how many threads go back to the Inbox. Double-clicking a label also opens it. | ⌘I |
   | Move Label Up / Down, which changes the number keys | ⌥⌘↑ / ⌥⌘↓ |
@@ -104,7 +108,7 @@ Scopes:
 
   A filter bar above the thread list narrows it by repo, reason and type. Reasons are in plain words: Mentioned, Review requested, Watching (you watch the repo), Subscribed (you subscribed to the thread), Failing CI, and so on. A reason is GitHub's latest for the thread, so it can change. Filters stay set as you switch views and reset when you quit. Sidebar counts ignore them, and the window title says "(filtered)" while one is on. Number keys and Done move to the next thread that matches.
 
-  Each command's description is both its tooltip in the menus and its entry in the Keyboard Shortcuts window, so the two can't drift apart. A note at the bottom of the sidebar says how to open that window. Until a thread is selected, the web view shows a placeholder that follows light and dark mode.
+  Each command's description is both its tooltip in the menus and its entry in the Keyboard Shortcuts window, so the two can't drift apart. Until a thread is selected, the web view shows a placeholder that follows light and dark mode.
 
   Number keys aren't menu shortcuts: a menu item with a plain-number shortcut can swallow digits typed into text fields, including a comment box in the web view. A local event monitor handles them instead, and only when a list has focus.
 
@@ -129,14 +133,14 @@ This costs little now, and it makes cross-device sync a matter of exchanging eve
 - Deleting a label takes it off every thread. Threads with no other labels go back to the Inbox. A label applied after it was deleted, for example from a device that hadn't yet seen the deletion, is ignored, so no thread can end up under a label that no longer exists.
 - A reorder records the whole order, and the latest reorder wins. Labels it doesn't mention, such as ones another device created meanwhile, keep their relative order after the ones it does.
 - Changing a label's "Flag on activity" affects only activity from then on. Threads that already have the label aren't flagged retroactively.
-- Attention required can't be renamed, moved or deleted. The six default labels can.
+- Attention required can't be renamed, moved or deleted. The default labels can.
 - Activity events carry GitHub's timestamp, not the time Propolis noticed the activity, and their ID is the thread ID plus that timestamp. If two devices detect the same activity, their events collapse into one instead of conflicting.
 
 Because activity carries GitHub's timestamp, it can arrive after events that it precedes, and the store replays the log when that happens. A consequence is that activity which happened before you labelled a thread doesn't flag it, even if Propolis only notices it afterwards.
 
 ## Sync (later)
 
-The planned backend is a private gist with one event-log file per device. It needs no server and no new account, and it uses the same GitHub token plus the `gist` scope. Each device writes only its own file, so writes never conflict. The logs will need occasional compaction as they grow.
+The planned backend is a private gist with one event-log file per device. It needs no server and no new account, and it uses the same GitHub token plus the `gist` scope. Each device writes only its own file, so writes never conflict. The logs will need occasional compaction as they grow. Placing a new thread in the Inbox records `ActivityDetected`, which flags the thread if it has a flagging label by then. So a device must catch up with the other devices' events before it places threads, or it could flag a thread that another device has just labelled.
 
 ## Platforms
 

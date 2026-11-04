@@ -40,6 +40,8 @@ def _built_in_labels() -> dict[str, Label]:
         "blocked": Label("Blocked", flag_on_activity=True),
         "low-priority": Label("Low priority"),
         "high-priority": Label("High priority", flag_on_activity=True),
+        "in-progress": Label("In progress"),
+        "cold-storage": Label("Cold storage"),
     }
 
 

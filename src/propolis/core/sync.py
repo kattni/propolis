@@ -9,18 +9,20 @@ from propolis.core.activity import needs_response
 from propolis.core.github import GitHub, Notification, parse_time
 from propolis.core.store import Store
 
-CACHE_VERSION = "2"
-"""Bump when ThreadInfo gains a field. 2: the notification reason."""
-
 
 class Sync:
     def __init__(self, store: Store, github: GitHub):
         self._store = store
         self._github = github
         self._me: str | None = None
+        self._read_whole_inbox = False
 
     async def run_once(self) -> None:
-        """Fetch what's changed on GitHub and record any activity that counts."""
+        """Fetch what's changed on GitHub and record any activity that counts.
+
+        The first run reads your whole GitHub inbox, and later runs only what's
+        changed since.
+        """
         if self._me is None:
             self._me = await self._github.me()
         await self._sync_notifications()
@@ -39,46 +41,55 @@ class Sync:
                 self._store.save_info(info)
 
     async def _sync_notifications(self) -> None:
-        # When the cached thread details gain a field, refetch every
-        # notification once so the details catch up. That costs pages of
-        # notifications, but no timelines, as nothing has changed.
-        refetch = self._store.get_meta("cache_version") != CACHE_VERSION
-        since = parse_time(self._store.get_meta("notifications_since"))
-        last_modified = self._store.get_meta("notifications_last_modified")
+        # GitHub can list a thread after polls have moved past its updated_at,
+        # for example one moved back to the inbox after being marked done. So
+        # the first sync after Propolis starts reads the whole inbox. That
+        # costs pages of notifications, but no timelines for threads that
+        # haven't changed. It also brings every thread's cached details up to
+        # date.
+        since, last_modified = None, None
+        if self._read_whole_inbox:
+            since = parse_time(self._store.get_meta("notifications_since"))
+            last_modified = self._store.get_meta("notifications_last_modified")
         notifications, last_modified = await self._github.notifications(
-            since=None if refetch else since,
-            last_modified=None if refetch else last_modified,
+            since=since, last_modified=last_modified
         )
         if notifications is None:
             return
         for notification in notifications:
-            # CI failures are found by polling your pull requests instead.
-            if notification.reason != "ci_activity":
-                await self._check(notification)
+            await self._check(notification)
         if notifications:
             since = max(notification.updated_at for notification in notifications)
             self._store.set_meta("notifications_since", since.isoformat())
         if last_modified:
             self._store.set_meta("notifications_last_modified", last_modified)
-        self._store.set_meta("cache_version", CACHE_VERSION)
+        self._read_whole_inbox = True
 
     async def _check(self, notification: Notification) -> None:
-        """Record the latest activity on a thread that needs a response."""
+        """Put a new thread in the Inbox, or record the latest activity on a
+        known one that needs a response."""
         info = notification.info
         previous = self._store.info(info.key)
-        if previous:
-            checked = previous.checked_until
-        elif notification.unread:
-            # The first time a thread is seen, start from when you last read it.
-            checked = notification.last_read_at
+        if info.key not in self._store.state.threads:
+            # Everything in your GitHub inbox that Propolis hasn't placed yet
+            # starts in the Inbox, whoever acted on it. Threads you've read on
+            # GitHub have nothing new.
+            self._store.record_activity(info.key, notification.updated_at)
+            if not notification.unread:
+                self._store.mark_viewed(info.key, at=notification.updated_at)
+            checked = notification.updated_at
+        elif notification.reason == "ci_activity":
+            # CI failures are found by polling your pull requests instead.
+            checked = notification.updated_at
         else:
-            # You've read everything on it already.
-            checked = notification.updated_at
-        if checked is None or notification.updated_at > checked:
-            latest = await self._latest_needing_response(notification, since=checked)
-            if latest is not None:
-                self._store.record_activity(info.key, latest)
-            checked = notification.updated_at
+            checked = previous.checked_until if previous else notification.updated_at
+            if checked is None or notification.updated_at > checked:
+                latest = await self._latest_needing_response(
+                    notification, since=checked
+                )
+                if latest is not None:
+                    self._store.record_activity(info.key, latest)
+                checked = notification.updated_at
         self._store.save_info(replace(info, checked_until=checked))
 
     async def _latest_needing_response(

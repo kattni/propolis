@@ -96,8 +96,9 @@ class Store:
         """Remove all of a thread's labels until it sees new activity."""
         self._append(MarkedDone(**self._new(), thread_id=thread_id))
 
-    def mark_viewed(self, thread_id: str) -> None:
-        self._append(Viewed(**self._new(), thread_id=thread_id))
+    def mark_viewed(self, thread_id: str, at: datetime | None = None) -> None:
+        """Record that you've seen the thread, now or at ``at``."""
+        self._append(Viewed(**self._new(at), thread_id=thread_id))
 
     def record_activity(self, thread_id: str, at: datetime) -> None:
         """Record activity that needs a response, at GitHub's timestamp.
@@ -137,8 +138,8 @@ class Store:
         with self._db:
             self._db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, value))
 
-    def _new(self) -> dict:
-        return {"id": uuid4().hex, "at": self._clock(), "device": self.device}
+    def _new(self, at: datetime | None = None) -> dict:
+        return {"id": uuid4().hex, "at": at or self._clock(), "device": self.device}
 
     def _append(self, event: Event) -> None:
         with self._db:

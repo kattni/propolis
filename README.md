@@ -4,9 +4,10 @@ Triage your GitHub notifications with labels that keep their order.
 
 GitHub's inbox sorts by latest activity, so anything you've set aside moves every time someone comments on it. Propolis keeps its own triage state instead:
 
+- Everything in your GitHub inbox starts in the Propolis Inbox, read or not.
 - File a thread under a label, such as "Deep response", and it stays there, in the order you filed it, however much activity it gets. You can work through each label in the order you triaged it.
 - Some labels, such as "High priority", **flag on activity**. When someone else acts on one of their threads, it's also put under **Attention required**, so it comes back to you.
-- Only activity that needs a response from you counts. Your own activity doesn't, and neither do bots, unless they mention you, request your review or assign you. A failing CI run on one of your pull requests does count.
+- After that, only activity that needs a response from you counts. Your own activity doesn't, and neither do bots, unless they mention you, request your review or assign you. A failing CI run on one of your pull requests does count.
 
 Propolis is a [BeeWare](https://beeware.org/) app, built with Toga and Briefcase. For now, it runs on macOS.
 
@@ -22,11 +23,11 @@ $ .venv/bin/pip install briefcase
 $ .venv/bin/briefcase dev
 ```
 
-There's no account to create and nothing to register. The first time Propolis opens, it shows a code. Click **Open GitHub**, enter the code at github.com/login/device, and approve Propolis. It then syncs your notifications, and keeps syncing every minute.
+There's no account to create and nothing to register. The first time Propolis opens, it shows a code. Click **Open GitHub**, enter the code at github.com/login/device, and approve Propolis. It then imports your whole GitHub inbox, and keeps syncing every minute. Each time Propolis starts, it reads the whole inbox again, to catch anything a sync missed.
 
 ## Using Propolis
 
-The sidebar lists the **Inbox**, **Attention required** and your labels. The Inbox holds threads you haven't triaged yet, newest first. A ● marks a thread with activity you haven't seen. A label's count shows how many threads it has, and how many have something new, for example "(3, 1 new)".
+The sidebar lists the **Inbox**, **Attention required** and your labels. The Inbox holds threads you haven't triaged yet, newest first. A ● marks a thread with activity you haven't seen. Imported threads that are unread on GitHub start with a ●. A label's count shows how many threads it has, and how many have something new, for example "(3, 1 new)".
 
 Select a thread to read it in the pane below the list. That counts as viewing it, so it's marked read on GitHub. To comment, sign in to GitHub inside that pane once; the sign-in is remembered.
 
@@ -35,8 +36,8 @@ To triage, select a thread and type a label's number (1 to 9, shown beside each 
 | Key | Action |
 |---|---|
 | 1 to 9 | Apply that label to the selected thread |
-| ⌘E | Done: take the thread out of every view, and mark it done on GitHub. Activity from someone else brings it back to the Inbox. |
-| ⌘⌫ | Take this view's label off the selected thread. In Attention required, this is how you say you've dealt with it. |
+| ⌘D | Done: take the thread out of every view, and mark it done on GitHub. Activity from someone else brings it back to the Inbox. |
+| ⌫ | Take this view's label off the selected thread. In Attention required, this is how you say you've dealt with it. In the Inbox, it marks the thread done, like ⌘D. |
 | ⌘O | Open the selected thread in your browser |
 | ⇧⌘N, ⌘I | New Label, Edit Label (rename, change "Flag on activity", or delete) |
 | ⌥⌘↑, ⌥⌘↓ | Move the selected label up or down, which changes its number |
@@ -44,7 +45,7 @@ To triage, select a thread and type a label's number (1 to 9, shown beside each 
 | ⌘R | Sync now |
 | ⌘/ | Show every keyboard shortcut |
 
-Propolis starts with six labels: Needs review, Question, Deep response, Blocked, Low priority and High priority. Blocked and High priority flag on activity. You can change all of them.
+Propolis starts with eight labels: Needs review, Question, Deep response, Blocked, Low priority, High priority, In progress and Cold storage. Blocked and High priority flag on activity. You can change all of them. Only the first nine labels have a number key, so to give one of your own labels a number, move it up with ⌥⌘↑.
 
 ## Your data
 

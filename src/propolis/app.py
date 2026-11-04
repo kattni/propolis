@@ -21,7 +21,7 @@ from propolis.core.state import ATTENTION
 from propolis.core.store import Store
 from propolis.core.sync import Sync
 from propolis.core.triage import Triage
-from propolis.macos import NumberKeys, select_row
+from propolis.macos import ListKeys, disable_window_tabs, has_focus, select_row
 from propolis.views import (
     INBOX,
     Filters,
@@ -57,7 +57,8 @@ class Propolis(toga.App):
         self._shown: str | None = None
         self._numbered: dict[int, str] = {}
         self._label_commands: list[toga.Command] = []
-        self._number_keys = NumberKeys(self._on_number)
+        self._list_keys = ListKeys(self._on_number, self._on_delete)
+        disable_window_tabs()
 
         # Each command's tooltip also describes it in the Keyboard Shortcuts
         # window, so the two can't drift apart.
@@ -79,7 +80,7 @@ class Propolis(toga.App):
         self.done_command = toga.Command(
             self._done,
             "Done",
-            shortcut=toga.Key.MOD_1 + "e",
+            shortcut=toga.Key.MOD_1 + "d",
             tooltip="Take the selected thread out of every view, and mark it done "
             "on GitHub. Activity from someone else brings it back to the Inbox.",
             group=THREAD,
@@ -87,7 +88,7 @@ class Propolis(toga.App):
         self.unlabel_command = toga.Command(
             self._unlabel,
             "Remove from This View",
-            shortcut=toga.Key.MOD_1 + toga.Key.BACKSPACE,
+            # Delete, handled by ListKeys. See _on_delete.
             tooltip="Take this view's label off the selected thread. In Attention "
             "required, this is how you say you've dealt with it.",
             group=THREAD,
@@ -180,7 +181,7 @@ class Propolis(toga.App):
             self._show_sign_in()
 
     async def on_exit(self):
-        self._number_keys.remove()
+        self._list_keys.remove()
         await self._close_github()
         self.store.close()
         return True
@@ -316,18 +317,6 @@ class Propolis(toga.App):
             on_activate=self._edit_label,
             style=Pack(flex=1),
         )
-        shortcuts = shortcut_text(self.shortcuts_command.shortcut)
-        sidebar_box = toga.Box(
-            children=[
-                self.sidebar_table,
-                toga.Divider(),
-                toga.Label(
-                    f"Press {shortcuts} for keyboard shortcuts",
-                    style=Pack(margin=(6, 10), font_size=11),
-                ),
-            ],
-            style=Pack(direction=COLUMN),
-        )
         self.thread_table = toga.Table(
             columns=[
                 AccessorColumn("Title", "title"),
@@ -368,7 +357,7 @@ class Propolis(toga.App):
             children=[
                 toga.SplitContainer(
                     content=[
-                        (sidebar_box, 1),
+                        (self.sidebar_table, 1),
                         (
                             toga.SplitContainer(
                                 direction=toga.SplitContainer.HORIZONTAL,
@@ -548,6 +537,19 @@ class Propolis(toga.App):
             view = self.view
             await self._act_on_selection(lambda key: self.triage.unlabel(key, view))
 
+    def _on_delete(self) -> bool:
+        """Delete in the thread list removes the thread from this view. The
+        Inbox has no label to remove, so there it means Done."""
+        if self.current_window is not self.main_window or self.triage is None:
+            return False
+        if not has_focus(self.thread_table):
+            return False
+        if self.view == INBOX:
+            asyncio.create_task(self._done(self.done_command))
+        else:
+            asyncio.create_task(self._unlabel(self.unlabel_command))
+        return True
+
     # Applying labels
 
     def _on_number(self, number: int) -> bool:
@@ -612,7 +614,13 @@ class Propolis(toga.App):
                         "as viewing it.",
                     ),
                     describe(self.done_command),
-                    describe(self.unlabel_command),
+                    (
+                        "⌫",
+                        self.unlabel_command.text,
+                        f"{self.unlabel_command.tooltip} In the Inbox, Delete "
+                        "marks the thread done instead. Works while the thread "
+                        "list has focus.",
+                    ),
                     describe(self.open_command),
                 ],
             ),

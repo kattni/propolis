@@ -1,5 +1,8 @@
+from datetime import UTC, datetime
+
 import pytest
 
+from propolis.core.state import ATTENTION
 from propolis.core.store import Store
 from propolis.core.sync import Sync
 
@@ -33,7 +36,10 @@ def comment(login, at, body="", bot=False):
 
 @pytest.fixture
 def store(tmp_path):
-    with Store(tmp_path / "propolis.db") as store:
+    # Triage happens at noon, after the first notifications and before the
+    # activity that follows.
+    noon = datetime(2026, 11, 3, 12, 30, tzinfo=UTC)
+    with Store(tmp_path / "propolis.db", clock=lambda: noon) as store:
         yield store
 
 
@@ -42,39 +48,75 @@ def no_open_prs(fake_github):
     fake_github.routes["POST", "/graphql"] = {"data": {"search": {"nodes": []}}}
 
 
-async def test_sync_records_activity_that_needs_a_response(
+async def test_sync_imports_the_whole_inbox_at_startup(
     store, github, fake_github, no_open_prs
 ):
     fake_github.routes["GET", "/notifications"] = [
         notification(1, "2026-11-03T10:00:00Z"),
-        notification(2, "2026-11-03T11:00:00Z"),
-        notification(3, "2026-11-03T12:00:00Z"),
-        # GitHub can mark a thread read without saying when.
-        notification(4, "2026-11-03T13:00:00Z", unread=False),
-        # Without the repo scope, a private repo's timeline is a 404. The fake
-        # GitHub has no timeline for this one, so it returns a 404 too.
-        notification(5, "2026-11-03T09:00:00Z"),
-    ]
-    timeline = "/repos/beeware/toga/issues/{}/timeline".format
-    fake_github.routes["GET", timeline(1)] = [
-        comment("freakboy3742", "2026-11-03T10:00:00Z")
-    ]
-    fake_github.routes["GET", timeline(2)] = [
-        comment("kattni", "2026-11-03T10:30:00Z"),
-        comment("codecov[bot]", "2026-11-03T11:00:00Z", "Coverage: 100%", bot=True),
-    ]
-    fake_github.routes["GET", timeline(3)] = [
-        comment("cla-bot[bot]", "2026-11-03T12:00:00Z", "Thanks @kattni!", bot=True)
-    ]
-    fake_github.routes["GET", timeline(4)] = [
-        comment("freakboy3742", "2026-11-03T13:00:00Z")
+        notification(2, "2026-11-03T11:00:00Z", unread=False),
     ]
 
     await Sync(store, github).run_once()
 
-    assert store.state.inbox() == ["beeware/toga#3", "beeware/toga#1", "beeware/toga#5"]
-    assert store.info("beeware/toga#1").title == "Thread 1"
+    # Read or not, and whoever acted, it all starts in the Inbox. Only the
+    # unread thread is new.
+    inbox = store.state.inbox()
+    assert inbox == ["beeware/toga#2", "beeware/toga#1"]
+    assert [store.state.threads[key].new_activity for key in inbox] == [False, True]
     assert store.info("beeware/toga#1").reason == "subscribed"
+
+    # GitHub can list a thread after polls have moved past its updated_at, for
+    # example one moved back to the inbox after being marked done. Starting
+    # Propolis again reads the whole inbox, so it catches up, without undoing
+    # your triage.
+    fake_github.routes["GET", "/notifications"].append(
+        notification(3, "2026-11-03T09:00:00Z", unread=False)
+    )
+    store.mark_done("beeware/toga#1")
+
+    await Sync(store, github).run_once()
+
+    assert store.state.inbox() == ["beeware/toga#2", "beeware/toga#3"]
+
+
+async def test_sync_flags_activity_that_needs_a_response(
+    store, github, fake_github, no_open_prs
+):
+    fake_github.routes["GET", "/notifications"] = [
+        notification(number, "2026-11-03T09:00:00Z") for number in range(1, 5)
+    ]
+    sync = Sync(store, github)
+    await sync.run_once()
+    for number in range(1, 5):
+        store.label(f"beeware/toga#{number}", "high-priority")
+
+    fake_github.routes["GET", "/notifications"] = [
+        notification(1, "2026-11-03T13:00:00Z"),
+        notification(2, "2026-11-03T14:00:00Z"),
+        notification(3, "2026-11-03T15:00:00Z"),
+        # Without the repo scope, a private repo's timeline is a 404. The fake
+        # GitHub has no timeline for this one, so it returns a 404 too.
+        notification(4, "2026-11-03T16:00:00Z"),
+    ]
+    timeline = "/repos/beeware/toga/issues/{}/timeline".format
+    fake_github.routes["GET", timeline(1)] = [
+        comment("freakboy3742", "2026-11-03T13:00:00Z")
+    ]
+    fake_github.routes["GET", timeline(2)] = [
+        comment("kattni", "2026-11-03T13:30:00Z"),
+        comment("codecov[bot]", "2026-11-03T14:00:00Z", "Coverage: 100%", bot=True),
+    ]
+    fake_github.routes["GET", timeline(3)] = [
+        comment("cla-bot[bot]", "2026-11-03T15:00:00Z", "Thanks @kattni!", bot=True)
+    ]
+
+    await sync.run_once()
+
+    assert store.state.labelled(ATTENTION) == [
+        "beeware/toga#1",
+        "beeware/toga#3",
+        "beeware/toga#4",
+    ]
 
 
 async def test_sync_records_failing_ci_on_my_pull_requests(store, github, fake_github):

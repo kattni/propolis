@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import httpx2
 import pytest
 
@@ -21,7 +23,16 @@ class FakeGitHub:
         self.requests.append(key)
         if key not in self.routes:
             return httpx2.Response(404, json={"message": "Not Found"})
-        return httpx2.Response(200, json=self.routes[key])
+        body = self.routes[key]
+        if since := request.url.params.get("since"):
+            # Like GitHub, list only notifications updated since then.
+            since = datetime.fromisoformat(since)
+            body = [
+                item
+                for item in body
+                if datetime.fromisoformat(item["updated_at"]) > since
+            ]
+        return httpx2.Response(200, json=body)
 
 
 @pytest.fixture

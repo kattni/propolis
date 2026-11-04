@@ -50,7 +50,9 @@ def test_views_show_counts_and_thread_details(tmp_path):
             ("Blocked", 4, 0, 0),
             ("Low priority", 5, 0, 0),
             ("High priority", 6, 0, 0),
-            ("Later", 7, 1, 1),
+            ("In progress", 7, 0, 0),
+            ("Cold storage", 8, 0, 0),
+            ("Later", 9, 1, 1),
         ]
 
 

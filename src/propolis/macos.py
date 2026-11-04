@@ -15,24 +15,29 @@ if _MACOS:
     NSEvent = ObjCClass("NSEvent")
     NSIndexSet = ObjCClass("NSIndexSet")
     NSTableView = ObjCClass("NSTableView")
+    NSWindow = ObjCClass("NSWindow")
 
 _KEY_DOWN_MASK = 1 << 10
 # Shift, Control, Option and Command. A key typed with any of these isn't a
-# plain number.
+# plain key.
 _MODIFIERS = (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20)
+_DELETE_KEY_CODE = 51
 
 
-class NumberKeys:
-    """Calls ``on_number(n)`` when 1 to 9 is typed while a list has focus.
+class ListKeys:
+    """Plain keys typed while a list has focus: ``on_number(n)`` for 1 to 9,
+    and ``on_delete()`` for Delete.
 
-    The key is swallowed only if ``on_number`` returns True. Keys typed into
+    A key is swallowed only if its callback returns True. Keys typed into
     anything else, such as a text field or a web page, are left alone.
 
     This uses a local event monitor rather than menu shortcuts. A menu item
-    with a plain-number shortcut can swallow digits from text fields.
+    with a shortcut that has no modifier can swallow that key from text fields.
     """
 
-    def __init__(self, on_number: Callable[[int], bool]):
+    def __init__(
+        self, on_number: Callable[[int], bool], on_delete: Callable[[], bool]
+    ):
         self._monitor = None
         if not _MACOS:
             return
@@ -40,11 +45,15 @@ class NumberKeys:
         def handler(event):
             # Rubicon may hand over either a raw pointer or an ObjCInstance.
             event = event if isinstance(event, ObjCInstance) else ObjCInstance(event)
-            number = _number_typed_in_list(event)
-            if number is not None and on_number(number):
-                return None
+            match _plain_key_in_list(event):
+                case None:
+                    handled = False
+                case "delete":
+                    handled = on_delete()
+                case number:
+                    handled = on_number(int(number))
             # ctypes wants a plain address for a pointer result.
-            return event.ptr.value
+            return None if handled else event.ptr.value
 
         # The block must outlive the monitor, so keep a reference to it.
         self._block = Block(handler, objc_id, objc_id)
@@ -58,17 +67,38 @@ class NumberKeys:
             self._monitor = None
 
 
-def _number_typed_in_list(event) -> int | None:
+def _plain_key_in_list(event) -> str | None:
+    """"1" to "9" or "delete", typed with no modifier while a list has focus."""
     if event.modifierFlags & _MODIFIERS:
         return None
-    characters = str(event.charactersIgnoringModifiers or "")
-    if len(characters) != 1 or characters not in "123456789":
-        return None
+    if event.keyCode == _DELETE_KEY_CODE:
+        key = "delete"
+    else:
+        key = str(event.charactersIgnoringModifiers or "")
+        if len(key) != 1 or key not in "123456789":
+            return None
     window = event.window
     responder = window.firstResponder if window else None
     if responder is None or not responder.isKindOfClass(NSTableView):
         return None
-    return int(characters)
+    return key
+
+
+def has_focus(table: toga.Table) -> bool:
+    """Whether a Toga ``Table`` has keyboard focus."""
+    if not _MACOS:
+        return False
+    native = table._impl.native_table
+    window = native.window
+    responder = window.firstResponder if window else None
+    return responder is not None and responder.ptr.value == native.ptr.value
+
+
+def disable_window_tabs() -> None:
+    """Turn off macOS's window tabs, and the Show Tab Bar and Show All Tabs
+    items it adds to the View menu."""
+    if _MACOS:
+        NSWindow.setAllowsAutomaticWindowTabbing(False)
 
 
 def select_row(table: toga.Table, index: int) -> None:

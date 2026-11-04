@@ -92,6 +92,8 @@ def test_labels_can_be_renamed_reordered_and_deleted(store, clock):
         "question",
         "deep-response",
         "blocked",
+        "in-progress",
+        "cold-storage",
     ]
     assert store.state.labels["low-priority"].name == "Someday"
 
