@@ -51,6 +51,9 @@ async def test_sync_records_activity_that_needs_a_response(
         notification(3, "2026-11-03T12:00:00Z"),
         # GitHub can mark a thread read without saying when.
         notification(4, "2026-11-03T13:00:00Z", unread=False),
+        # Without the repo scope, a private repo's timeline is a 404. The fake
+        # GitHub has no timeline for this one, so it returns a 404 too.
+        notification(5, "2026-11-03T09:00:00Z"),
     ]
     timeline = "/repos/beeware/toga/issues/{}/timeline".format
     fake_github.routes["GET", timeline(1)] = [
@@ -69,7 +72,7 @@ async def test_sync_records_activity_that_needs_a_response(
 
     await Sync(store, github).run_once()
 
-    assert store.state.inbox() == ["beeware/toga#3", "beeware/toga#1"]
+    assert store.state.inbox() == ["beeware/toga#3", "beeware/toga#1", "beeware/toga#5"]
     assert store.info("beeware/toga#1").title == "Thread 1"
     assert store.info("beeware/toga#1").reason == "subscribed"
 

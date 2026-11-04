@@ -41,7 +41,7 @@ Only activity that needs a response from you counts:
 - Bot activity (accounts GitHub marks as type `Bot`) counts only if the bot @mentions you, requests your review, or assigns you. A bot running on an ordinary user account looks like a person, so its activity counts.
 - Failing CI on one of your own pull requests counts.
 - Commits pushed to a pull request don't count. The timeline identifies commits by git author, not GitHub login, so there's no way to tell whose they are. Comments, reviews, force-pushes, labels and state changes by others all count.
-- Any update to a discussion or release counts. GitHub's REST API doesn't say who acted on them.
+- Any update to a discussion, a release, or a thread in a private repo counts. GitHub's REST API doesn't say who acted on discussions and releases. Without the `repo` scope, a private repo's timeline is a `404`, so Propolis can't tell either. A `404` used to abort the whole sync.
 
 How activity is detected: Propolis polls `/notifications?all=true` with `since` and `If-Modified-Since`, so a poll where nothing has changed costs nothing against the rate limit. The notifications API only says that a thread's `updated_at` changed, not what changed. When it moves forward, Propolis fetches the thread's timeline (`/repos/{owner}/{repo}/issues/{n}/timeline`, which covers pull requests too) and looks at events since its last check.
 
@@ -69,7 +69,7 @@ Propolis signs in with OAuth device flow. This needs a GitHub **OAuth App**: Git
 
 Scopes:
 - `notifications`: read notifications, mark them read or done, and manage thread subscriptions.
-- No `repo` scope: for now Propolis covers public repos only, and reading their timelines and checks needs no scope. Private repos would need `repo`, which grants full read and write access to them.
+- No `repo` scope. Reading public repos' timelines and checks needs no scope. Notifications from private repos still appear, and marking them read or done works, but their timelines are hidden, so any update counts as activity. Seeing who acted would need `repo`, which grants full read and write access to private repos.
 - `gist`: added later, for sync.
 
 ## Architecture

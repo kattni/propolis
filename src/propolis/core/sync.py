@@ -3,6 +3,8 @@
 from dataclasses import replace
 from datetime import datetime
 
+import httpx2
+
 from propolis.core.activity import needs_response
 from propolis.core.github import GitHub, Notification, parse_time
 from propolis.core.store import Store
@@ -87,7 +89,15 @@ class Sync:
             # Discussions and releases have no timeline to check, so any
             # update counts.
             return notification.updated_at
-        activities = await self._github.timeline(info.repo, info.number)
+        try:
+            activities = await self._github.timeline(info.repo, info.number)
+        except httpx2.HTTPStatusError as error:
+            if error.response.status_code != 404:
+                raise
+            # A private repo: Propolis doesn't ask for the repo scope, so
+            # GitHub hides the timeline. With no way to tell who acted, any
+            # update counts.
+            return notification.updated_at
         return max(
             (
                 activity.at
