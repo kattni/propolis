@@ -12,6 +12,7 @@ author_email = "kattni@kattni.com"
 [tool.briefcase.app.propolis]
 formal_name = "Propolis"
 description = "Triage your GitHub notifications with labels that keep their order."
+icon = "src/propolis/resources/propolis"
 long_description = """More details about the app should go here.
 """
 sources = [
