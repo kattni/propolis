@@ -100,6 +100,12 @@ class Store:
         """Record that you've seen the thread, now or at ``at``."""
         self._append(Viewed(**self._new(at), thread_id=thread_id))
 
+    def add_to_inbox(self, thread_id: str) -> None:
+        """Put a thread at the top of the Inbox, with nothing new on it."""
+        now = self._clock()
+        self._append(ActivityDetected(**self._new(now), thread_id=thread_id))
+        self.mark_viewed(thread_id, at=now)
+
     def record_activity(self, thread_id: str, at: datetime) -> None:
         """Record activity that needs a response, at GitHub's timestamp.
 

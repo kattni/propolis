@@ -21,7 +21,7 @@ from propolis.core.github import GitHub
 from propolis.core.state import ATTENTION
 from propolis.core.store import Store
 from propolis.core.sync import Sync
-from propolis.core.triage import Triage
+from propolis.core.triage import AddError, Triage
 from propolis.macos import (
     ListKeys,
     disable_window_tabs,
@@ -86,7 +86,7 @@ class Propolis(toga.App):
         self._shown: str | None = None
         self._numbered: dict[int, str] = {}
         self._label_commands: list[toga.Command] = []
-        self._list_keys = ListKeys(self._on_number, self._on_delete)
+        self._list_keys = ListKeys(self._on_number, self._on_delete, self._on_move)
         disable_window_tabs()
 
         # Each command's tooltip also describes it in the Keyboard Shortcuts
@@ -97,6 +97,16 @@ class Propolis(toga.App):
             shortcut=toga.Key.MOD_1 + "r",
             tooltip="Sync with GitHub now. Propolis also syncs every minute.",
             group=toga.Group.VIEW,
+        )
+        self.add_thread_command = toga.Command(
+            self._add_thread,
+            "Add Thread…",
+            shortcut=toga.Key.MOD_1 + "t",
+            tooltip="Add an issue, pull request or discussion to the Inbox by its "
+            "number, such as beeware/toga#123, so you can file it like any other "
+            "thread.",
+            group=THREAD,
+            order=-1,
         )
         self.open_command = toga.Command(
             self._open,
@@ -125,7 +135,7 @@ class Propolis(toga.App):
         self.new_label_command = toga.Command(
             self._new_label,
             "New Label…",
-            shortcut=toga.Key.MOD_1 + toga.Key.SHIFT + "n",
+            shortcut=toga.Key.MOD_1 + "n",
             tooltip="Create a label, and choose whether activity flags its threads "
             "for attention.",
             group=LABELS,
@@ -135,16 +145,25 @@ class Propolis(toga.App):
             self._edit_label,
             "Edit Label…",
             shortcut=toga.Key.MOD_1 + "i",
-            tooltip="Rename, reconfigure or delete the label selected in the "
-            "sidebar. Double-clicking a label does the same.",
+            tooltip="Rename the label selected in the sidebar, or change whether "
+            "activity flags its threads. Double-clicking a label does the same.",
             group=LABELS,
             section=1,
             order=1,
         )
+        self.delete_label_command = toga.Command(
+            self._delete_label,
+            "Delete Label…",
+            shortcut=toga.Key.MOD_1 + toga.Key.SHIFT + toga.Key.BACKSPACE,
+            tooltip="Delete the label selected in the sidebar, after asking. Its "
+            "threads go back to the Inbox, unless they have other labels.",
+            group=LABELS,
+            section=2,
+        )
         self.move_up_command = toga.Command(
             lambda command, **kwargs: self._move_label(-1),
             "Move Label Up",
-            shortcut=toga.Key.MOD_1 + toga.Key.MOD_2 + toga.Key.UP,
+            # ⌘↑, handled by ListKeys. See _on_move.
             tooltip="Move the selected label up the sidebar, changing its number.",
             group=LABELS,
             section=1,
@@ -153,7 +172,7 @@ class Propolis(toga.App):
         self.move_down_command = toga.Command(
             lambda command, **kwargs: self._move_label(1),
             "Move Label Down",
-            shortcut=toga.Key.MOD_1 + toga.Key.MOD_2 + toga.Key.DOWN,
+            # ⌘↓, handled by ListKeys. See _on_move.
             tooltip="Move the selected label down the sidebar, changing its number.",
             group=LABELS,
             section=1,
@@ -168,7 +187,7 @@ class Propolis(toga.App):
         self.clear_filters_command = toga.Command(
             self._clear_filters,
             "Clear Filters",
-            shortcut=toga.Key.MOD_1 + toga.Key.SHIFT + "f",
+            shortcut=toga.Key.MOD_1 + "f",
             tooltip="Show every thread in the view again. Filters stay set as "
             "you switch views, and reset when you quit.",
             group=toga.Group.VIEW,
@@ -182,11 +201,13 @@ class Propolis(toga.App):
         )
         self.commands.add(
             self.refresh_command,
+            self.add_thread_command,
             self.open_command,
             self.done_command,
             self.unlabel_command,
             self.new_label_command,
             self.edit_label_command,
+            self.delete_label_command,
             self.move_up_command,
             self.move_down_command,
             self.sign_out_command,
@@ -328,6 +349,7 @@ class Propolis(toga.App):
     def _set_signed_in(self, signed_in: bool):
         for command in [
             self.refresh_command,
+            self.add_thread_command,
             self.open_command,
             self.done_command,
             self.new_label_command,
@@ -344,6 +366,7 @@ class Propolis(toga.App):
         editable = signed_in and self.view not in (INBOX, ATTENTION)
         for command in [
             self.edit_label_command,
+            self.delete_label_command,
             self.move_up_command,
             self.move_down_command,
         ]:
@@ -551,6 +574,71 @@ class Propolis(toga.App):
         self._filter_options = None  # so the choices are set again
         self._reload()
 
+    # Adding a thread by its number
+
+    def _add_thread(self, command, **kwargs):
+        reference = toga.TextInput(placeholder="owner/repo#123", style=Pack(flex=1))
+        message = toga.Label(
+            "An issue, pull request or discussion to add to the Inbox.",
+            # Room for two lines, so a longer message doesn't move the buttons.
+            style=Pack(font_size=11, height=36),
+        )
+        window = toga.Window(title="Add Thread", size=(420, 160), resizable=False)
+
+        async def add(widget, **kwargs):
+            add_button.enabled = False
+            message.text = "Looking it up on GitHub…"
+            try:
+                key = await self.triage.add(reference.value)
+            except AddError as error:
+                message.text = textwrap.fill(str(error), 60)
+            except httpx2.HTTPError as error:
+                message.text = textwrap.fill(f"Couldn't reach GitHub: {error}", 60)
+            except RuntimeError as error:
+                message.text = textwrap.fill(str(error), 60)
+            else:
+                window.close()
+                self._show_thread(key)
+                return
+            add_button.enabled = True
+
+        add_button = toga.Button("Add", on_press=add)
+        reference.on_confirm = add
+        window.content = toga.Box(
+            children=[
+                reference,
+                message,
+                toga.Box(
+                    children=[
+                        toga.Box(style=Pack(flex=1)),
+                        toga.Button(
+                            "Cancel", on_press=lambda widget, **kwargs: window.close()
+                        ),
+                        add_button,
+                    ],
+                    style=Pack(direction=ROW, gap=8),
+                ),
+            ],
+            style=Pack(direction=COLUMN, margin=16, gap=8),
+        )
+        window.show()
+        reference.focus()
+
+    def _show_thread(self, key: str):
+        """Switch to the view a thread is in, and select it there."""
+        thread = self.store.state.threads[key]
+        views = [row.view for row in self.sidebar_data]
+        view = next((view for view in views if view in thread.labels), INBOX)
+        select_row(self.sidebar_table, views.index(view))
+        if not self._filters.matches(self.store.info(key)):
+            self._filters = Filters()
+            self._filter_options = None
+        self._reload()
+        keys = [row.key for row in self.thread_table.data]
+        if key in keys:
+            select_row(self.thread_table, keys.index(key))
+            self.thread_table.focus()
+
     # Thread actions, on the selected thread
 
     async def _act_on_selection(self, action: Callable[[str], Awaitable[None]]):
@@ -667,18 +755,26 @@ class Propolis(toga.App):
                         "list has focus.",
                     ),
                     describe(self.open_command),
+                    describe(self.add_thread_command),
                 ],
             ),
             (
                 "Labels",
                 [
-                    describe(command)
-                    for command in [
-                        self.new_label_command,
-                        self.edit_label_command,
-                        self.move_up_command,
-                        self.move_down_command,
-                    ]
+                    describe(self.new_label_command),
+                    describe(self.edit_label_command),
+                    describe(self.delete_label_command),
+                    *[
+                        (
+                            keys,
+                            command.text,
+                            f"{command.tooltip} Works while the sidebar has focus.",
+                        )
+                        for keys, command in [
+                            ("⌘↑", self.move_up_command),
+                            ("⌘↓", self.move_down_command),
+                        ]
+                    ],
                 ],
             ),
             (
@@ -739,6 +835,35 @@ class Propolis(toga.App):
         if self.view not in (INBOX, ATTENTION):
             self._show_label_window(self.view)
 
+    def _on_move(self, offset: int) -> bool:
+        """⌘↑ or ⌘↓ in the sidebar moves the selected label."""
+        if self.current_window is not self.main_window or self.triage is None:
+            return False
+        if self.view in (INBOX, ATTENTION) or not has_focus(self.sidebar_table):
+            return False
+        self._move_label(offset)
+        return True
+
+    async def _delete_label(self, command, **kwargs):
+        """Delete the label selected in the sidebar, if you confirm it."""
+        if self.view in (INBOX, ATTENTION):
+            return
+        label_id = self.view
+        count = len(self.store.state.labelled(label_id))
+        threads = f"{count} thread{'' if count == 1 else 's'}"
+        message = (
+            f"Its {threads} will go back to the Inbox, unless they have other "
+            "labels."
+            if count
+            else "No threads have this label."
+        )
+        name = self.store.state.labels[label_id].name
+        if await self.main_window.dialog(
+            toga.ConfirmDialog(f"Delete “{name}”?", message)
+        ):
+            self.store.delete_label(label_id)
+            self._labels_changed()
+
     def _move_label(self, offset: int):
         order = [label_id for label_id in self.store.state.labels if label_id != ATTENTION]
         if self.view not in order:
@@ -774,24 +899,9 @@ class Propolis(toga.App):
                 self._labels_changed()
             window.close()
 
-        async def delete(widget, **kwargs):
-            count = len(self.store.state.labelled(label_id))
-            threads = f"{count} thread{'' if count == 1 else 's'}"
-            message = (
-                f"Its {threads} will go back to the Inbox, unless they have "
-                "other labels."
-                if count
-                else "No threads have this label."
-            )
-            if await window.dialog(
-                toga.ConfirmDialog(f"Delete “{label.name}”?", message)
-            ):
-                self.store.delete_label(label_id)
-                self._labels_changed()
-                window.close()
-
-        buttons = [toga.Button("Delete…", on_press=delete)] if label else []
-        buttons += [
+        # Return in the name field creates or saves the label.
+        name.on_confirm = save
+        buttons = [
             toga.Box(style=Pack(flex=1)),
             toga.Button("Cancel", on_press=lambda widget, **kwargs: window.close()),
             toga.Button("Save" if label else "Create", on_press=save),

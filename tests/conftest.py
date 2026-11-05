@@ -12,7 +12,10 @@ def anyio_backend():
 
 
 class FakeGitHub:
-    """Serves canned JSON by method and path, and records every request."""
+    """Serves canned JSON by method and path, and records every request.
+
+    A route can also be a function that takes the request and returns JSON.
+    """
 
     def __init__(self):
         self.routes = {("GET", "/user"): {"login": "kattni"}}
@@ -24,6 +27,8 @@ class FakeGitHub:
         if key not in self.routes:
             return httpx2.Response(404, json={"message": "Not Found"})
         body = self.routes[key]
+        if callable(body):
+            body = body(request)
         if since := request.url.params.get("since"):
             # Like GitHub, list only notifications updated since then.
             since = datetime.fromisoformat(since)

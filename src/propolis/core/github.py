@@ -48,6 +48,28 @@ query {
 """
 
 
+_FIND_DISCUSSION = """
+query($q: String!) {
+  search(query: $q, type: DISCUSSION, first: 20) {
+    nodes { ... on Discussion { number title url } }
+  }
+}
+"""
+_DISCUSSION = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    discussion(number: $number) {
+      number
+      title
+      url
+      updatedAt
+      repository { nameWithOwner }
+    }
+  }
+}
+"""
+
+
 @dataclass(frozen=True)
 class Notification:
     info: ThreadInfo
@@ -128,20 +150,65 @@ class GitHub:
             for activity in _activities(event)
         ]
 
+    async def issue(self, repo: str, number: int) -> ThreadInfo:
+        """An issue or pull request's details, wherever it lives now: GitHub
+        redirects to issues that have moved to another repo."""
+        response = await self._http.get(
+            f"/repos/{repo}/issues/{number}", follow_redirects=True
+        )
+        response.raise_for_status()
+        item = response.json()
+        repo = item["repository_url"].removeprefix(f"{API}/repos/")
+        return ThreadInfo(
+            key=f"{repo}#{item['number']}",
+            kind="PullRequest" if "pull_request" in item else "Issue",
+            repo=repo,
+            title=item["title"],
+            url=item["html_url"],
+            number=item["number"],
+            # Only activity after you add it counts.
+            checked_until=parse_time(item["updated_at"]),
+            reason="added",
+        )
+
+    async def find_discussion(self, repo: str, title: str) -> tuple[int, str] | None:
+        """The number and page of the discussion in ``repo`` with exactly this
+        title, or None unless there's exactly one."""
+        # Search finds titles containing the words; only an exact match counts.
+        words = title.replace('"', " ")
+        query = f'repo:{repo} in:title "{words}"'
+        nodes = (await self._graphql(_FIND_DISCUSSION, q=query))["search"]["nodes"]
+        matches = [node for node in nodes if node.get("title") == title]
+        if len(matches) != 1:
+            return None
+        return matches[0]["number"], matches[0]["url"]
+
+    async def discussion(self, repo: str, number: int) -> ThreadInfo | None:
+        """A discussion's details, or None if there's no such discussion."""
+        owner, _, name = repo.partition("/")
+        data = await self._graphql(_DISCUSSION, owner=owner, name=name, number=number)
+        if not (found := (data.get("repository") or {}).get("discussion")):
+            return None
+        repo = found["repository"]["nameWithOwner"]
+        return ThreadInfo(
+            key=f"{repo}#{found['number']}",
+            kind="Discussion",
+            repo=repo,
+            title=found["title"],
+            url=found["url"],
+            number=found["number"],
+            checked_until=parse_time(found["updatedAt"]),
+            reason="added",
+        )
+
     async def ci_failures(self) -> list[tuple[ThreadInfo, Activity]]:
         """The latest CI failure on each of your open pull requests.
 
         Covers both check runs (GitHub Actions and other apps) and commit
         statuses, on each pull request's latest commit.
         """
-        response = await self._http.post("/graphql", json={"query": _MY_OPEN_PRS_CI})
-        response.raise_for_status()
-        result = response.json()
-        if errors := result.get("errors"):
-            raise RuntimeError(f"GitHub GraphQL error: {errors[0].get('message')}")
-
         failures = []
-        for pr in result["data"]["search"]["nodes"]:
+        for pr in (await self._graphql(_MY_OPEN_PRS_CI))["search"]["nodes"]:
             failed_at = [
                 parse_time(context.get("completedAt") or context.get("createdAt"))
                 for commit in pr["commits"]["nodes"]
@@ -180,6 +247,23 @@ class GitHub:
             json={"ignored": False},
         )
         response.raise_for_status()
+
+    async def _graphql(self, query: str, **variables) -> dict:
+        """The data a GraphQL query returns. Something not found is missing
+        from the data rather than an error."""
+        response = await self._http.post(
+            "/graphql", json={"query": query, "variables": variables}
+        )
+        response.raise_for_status()
+        result = response.json()
+        errors = [
+            error
+            for error in result.get("errors") or []
+            if error.get("type") != "NOT_FOUND"
+        ]
+        if errors:
+            raise RuntimeError(f"GitHub GraphQL error: {errors[0].get('message')}")
+        return result.get("data") or {}
 
     async def _get(self, path: str, **kwargs) -> httpx2.Response:
         response = await self._http.get(path, **kwargs)

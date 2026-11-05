@@ -35,6 +35,8 @@ Users never write rules. Behaviour is configured only through this per-label set
 
 **Done**: removes all labels from a thread and marks it done on GitHub. If someone else later acts on it, it comes back to the Inbox.
 
+**Adding a thread**: you can add an issue, pull request or discussion that isn't in your notifications by its number, as `owner/repo#123`. Propolis looks it up with `GET /repos/{owner}/{repo}/issues/{n}`, which follows a moved issue to its new repo and needs no scope for public repos. Discussions share the numbering but aren't in the issues API, so on a `404` Propolis asks GraphQL for the repo's discussion with that number. A thread that's in no view, or done, goes at the top of the Inbox with nothing new on it. One that's already in a view stays where it is. Its reason is "Added by you", and only activity after you add it counts. Propolis sees that activity only if GitHub sends you notifications for the thread, because adding it doesn't subscribe you. Once a notification arrives, its details replace the ones from adding it.
+
 ## What counts as activity
 
 Only activity that needs a response from you counts:
@@ -50,6 +52,8 @@ How activity is detected: Propolis polls `/notifications?all=true` with `since` 
 Every thread in your GitHub inbox that Propolis hasn't placed yet goes in the Inbox, whoever acted on it and whether or not you've read it. "Placed" means it has any event: it's labelled, done, or already in the Inbox. Propolis records an `ActivityDetected` event at the thread's `updated_at`, so the Inbox keeps GitHub's order. A thread that's read on GitHub also gets a `Viewed` event at that time, so it starts with nothing new. Propolis doesn't fetch the timeline of a thread it's placing. The rules above apply to threads once they're placed: whether a labelled thread is flagged, and whether a done one comes back.
 
 The first sync after Propolis starts reads the whole inbox, without `since` or `If-Modified-Since`. GitHub can list a thread after polls have moved past its `updated_at`, for example one moved back to the inbox after being marked done, and an incremental poll would never see it. Threads you've placed keep their place, even if GitHub still lists them. On a real account, the first startup sync with this rule took the Inbox from 17 threads to 169, 20 of them new, for 4 pages of notifications and 4 other REST requests. Replaying the event log as each one was placed took 0.2 seconds in total.
+
+**Discussions** have no number in their notifications: `subject.url` is `null`, so a notification names only its repo, title and notification thread ID. Propolis searches the repo's discussions by title with GraphQL (`search(type: DISCUSSION)`), and if exactly one has that exact title, the thread gets the key `owner/repo#n` and the discussion's own page. That's what lets a discussion you added by number match its notifications. Otherwise, for example if two discussions share the title or search hasn't indexed a new one yet, the key comes from the notification thread ID, and the page is the repo's Discussions list. A discussion already in Propolis under that key keeps it, so it's never duplicated. What was found is cached by notification thread ID, so each discussion is searched for once.
 
 A CI failure doesn't update the pull request's notification thread, so Propolis polls for it separately:
 - One GraphQL query finds your open pull requests and reads the check runs and commit statuses on each one's latest commit.
@@ -90,20 +94,22 @@ Scopes:
   - Selecting a thread counts as viewing it: its ● goes, and it's marked read on GitHub.
   - After you label, unlabel or finish a thread, the thread that takes its place is selected, so you can keep triaging from the keyboard.
   - The web view has its own cookies, so to comment you sign in to GitHub inside it once. That sign-in survives quitting and reopening the app, confirmed under `briefcase dev`.
-- `propolis.macos`: what Toga doesn't offer yet, and a no-op on other platforms. It has a key-event monitor for plain number keys and Delete, and selects table rows through `NSTableView`. A menu shortcut with no modifier would take that key from text fields too, so these keys only act while a list has focus. It makes the Octicons template images, so macOS draws them in the text colour for light mode, dark mode and selected rows, gives the icon column a fixed width, and turns off macOS's window tabs, which would otherwise add Show Tab Bar and Show All Tabs to the View menu.
+- `propolis.macos`: what Toga doesn't offer yet, and a no-op on other platforms. It has a key-event monitor for plain number keys, Delete, and ⌘↑ and ⌘↓, and selects table rows through `NSTableView`. As menu shortcuts, these would take the keys from text fields and the web pane too, so they only act while a list has focus: the thread list for Delete, and the sidebar for ⌘↑ and ⌘↓. It makes the Octicons template images, so macOS draws them in the text colour for light mode, dark mode and selected rows, gives the icon column a fixed width, and turns off macOS's window tabs, which would otherwise add Show Tab Bar and Show All Tabs to the View menu.
 
   | Command | Shortcut |
   |---|---|
   | Apply label *n*. The default labels come first, then yours in the order you created them. The number shows in the sidebar and the Labels menu. | 1 to 9, while the thread list or sidebar has focus |
   | Refresh (sync now) | ⌘R |
   | Open in Browser (also double-click), which marks it viewed | ⌘O |
+  | Add Thread…: an issue or pull request by its number, as `owner/repo#123`. Propolis then shows the view it's in, with it selected. | ⌘T |
   | Done | ⌘D |
   | Remove from This View (removes the current view's label). The Inbox has no label to remove, so there Delete means Done. | Delete, while the thread list has focus |
-  | New Label… (name and "Flag on activity") | ⇧⌘N |
-  | Edit Label… for the label selected in the sidebar: rename, change "Flag on activity", or delete. Delete asks first, and says how many threads go back to the Inbox. Double-clicking a label also opens it. | ⌘I |
-  | Move Label Up / Down, which changes the number keys | ⌥⌘↑ / ⌥⌘↓ |
+  | New Label… (name and "Flag on activity") | ⌘N |
+  | Edit Label… for the label selected in the sidebar: rename, or change "Flag on activity". Double-clicking a label also opens it. | ⌘I |
+  | Delete Label… for the label selected in the sidebar. It asks first, and says how many threads go back to the Inbox. It's a separate command with two modifiers, so it's hard to do by accident. | ⇧⌘⌫ |
+  | Move Label Up / Down, which changes the number keys | ⌘↑ / ⌘↓, while the sidebar has focus |
   | Sign Out of GitHub | |
-  | Clear Filters | ⇧⌘F |
+  | Clear Filters | ⌘F |
   | Keyboard Shortcuts (Help menu) | ⌘/ |
 
   A filter bar above the thread list narrows it by repo, reason and type. Reasons are in plain words: Mentioned, Review requested, Watching (you watch the repo), Subscribed (you subscribed to the thread), Failing CI, and so on. A reason is GitHub's latest for the thread, so it can change. Filters stay set as you switch views and reset when you quit. Sidebar counts ignore them, and the window title says "(filtered)" while one is on. Number keys and Done move to the next thread that matches.

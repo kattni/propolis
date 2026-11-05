@@ -68,6 +68,7 @@ class Sync:
     async def _check(self, notification: Notification) -> None:
         """Put a new thread in the Inbox, or record the latest activity on a
         known one that needs a response."""
+        notification = await self._identify(notification)
         info = notification.info
         previous = self._store.info(info.key)
         if info.key not in self._store.state.threads:
@@ -92,11 +93,35 @@ class Sync:
                 checked = notification.updated_at
         self._store.save_info(replace(info, checked_until=checked))
 
+    async def _identify(self, notification: Notification) -> Notification:
+        """Give a discussion its number, which its notification doesn't carry,
+        by finding the one discussion in the repo with its title.
+
+        Unless it's found, it keeps a key made from the notification. So does
+        one that's already in Propolis under that key, so it isn't duplicated.
+        """
+        info = notification.info
+        if info.kind != "Discussion" or info.key in self._store.state.threads:
+            return notification
+        # Remember what was found, so each discussion is searched for once.
+        found_key = f"discussion:{info.notification_id}"
+        key = self._store.get_meta(found_key)
+        if key and (known := self._store.info(key)):
+            number, url = known.number, known.url
+        elif found := await self._github.find_discussion(info.repo, info.title):
+            number, url = found
+            key = f"{info.repo}#{number}"
+            self._store.set_meta(found_key, key)
+        else:
+            return notification
+        info = replace(info, key=key, number=number, url=url)
+        return replace(notification, info=info)
+
     async def _latest_needing_response(
         self, notification: Notification, since: datetime | None
     ) -> datetime | None:
         info = notification.info
-        if info.number is None:
+        if info.number is None or info.kind == "Discussion":
             # Discussions and releases have no timeline to check, so any
             # update counts.
             return notification.updated_at

@@ -39,13 +39,15 @@ To triage, select a thread and type a label's number (1 to 9, shown beside each 
 | ⌘D | Done: take the thread out of every view, and mark it done on GitHub. Activity from someone else brings it back to the Inbox. |
 | ⌫ | Take this view's label off the selected thread. In Attention required, this is how you say you've dealt with it. In the Inbox, it marks the thread done, like ⌘D. |
 | ⌘O | Open the selected thread in your browser |
-| ⇧⌘N, ⌘I | New Label, Edit Label (rename, change "Flag on activity", or delete) |
-| ⌥⌘↑, ⌥⌘↓ | Move the selected label up or down, which changes its number |
-| ⇧⌘F | Clear the repo, reason and type filters above the thread list |
+| ⌘T | Add an issue, pull request or discussion to the Inbox by its number, such as `beeware/toga#123`, so you can file it like any other thread |
+| ⌘N, ⌘I | New Label, Edit Label (rename, or change "Flag on activity") |
+| ⇧⌘⌫ | Delete the selected label, after asking. Its threads go back to the Inbox, unless they have other labels. |
+| ⌘↑, ⌘↓ | Move the selected label up or down, which changes its number. Works while the sidebar has focus. |
+| ⌘F | Clear the repo, reason and type filters above the thread list |
 | ⌘R | Sync now |
 | ⌘/ | Show every keyboard shortcut |
 
-Propolis starts with eight labels: Needs review, Question, Deep response, Blocked, Low priority, High priority, In progress and Cold storage. Blocked and High priority flag on activity. You can change all of them. Only the first nine labels have a number key, so to give one of your own labels a number, move it up with ⌥⌘↑.
+Propolis starts with eight labels: Needs review, Question, Deep response, Blocked, Low priority, High priority, In progress and Cold storage. Blocked and High priority flag on activity. You can change all of them. Only the first nine labels have a number key, so to give one of your own labels a number, select it in the sidebar and move it up with ⌘↑.
 
 ## Your data
 

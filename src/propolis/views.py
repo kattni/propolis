@@ -25,6 +25,7 @@ _ICONS = {
 """GitHub's Octicon for each type of thread. Any other type gets a bell."""
 
 REASONS = {
+    "added": "Added by you",
     "approval_requested": "Approval requested",
     "assign": "Assigned",
     "author": "Author",

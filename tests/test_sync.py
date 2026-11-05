@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -22,6 +23,19 @@ def notification(number, updated_at, unread=True):
             "type": "Issue",
             "url": f"https://api.github.com/repos/beeware/toga/issues/{number}",
         },
+    }
+
+
+def discussion(notification_id, title, updated_at):
+    return {
+        "id": notification_id,
+        "reason": "subscribed",
+        "unread": True,
+        "updated_at": updated_at,
+        "last_read_at": None,
+        "repository": {"full_name": "beeware/toga"},
+        # A discussion's notification doesn't say which discussion it is.
+        "subject": {"title": title, "type": "Discussion", "url": None},
     }
 
 
@@ -163,3 +177,38 @@ async def test_sync_records_failing_ci_on_my_pull_requests(store, github, fake_g
     store.mark_done("beeware/toga#42")
     await sync.run_once()
     assert store.state.inbox() == []
+
+
+async def test_sync_finds_discussions_by_their_title(store, github, fake_github):
+    def graphql(request):
+        if "DISCUSSION" not in json.loads(request.content)["query"]:
+            return {"data": {"search": {"nodes": []}}}  # No open pull requests
+        found = [(7, "Ideas"), (8, "Ideas for Toga"), (9, "Help"), (10, "Help")]
+        return {
+            "data": {
+                "search": {
+                    "nodes": [
+                        {
+                            "number": number,
+                            "title": title,
+                            "url": f"https://github.com/beeware/toga/discussions/{number}",
+                        }
+                        for number, title in found
+                    ]
+                }
+            }
+        }
+
+    fake_github.routes["POST", "/graphql"] = graphql
+    fake_github.routes["GET", "/notifications"] = [
+        discussion("d1", "Ideas", "2026-11-03T10:00:00Z"),
+        # Two discussions have this title, so there's no telling which it is.
+        discussion("d2", "Help", "2026-11-03T09:00:00Z"),
+    ]
+
+    await Sync(store, github).run_once()
+
+    assert store.state.inbox() == ["beeware/toga#7", "beeware/toga/notification/d2"]
+    assert store.info("beeware/toga#7").url == (
+        "https://github.com/beeware/toga/discussions/7"
+    )

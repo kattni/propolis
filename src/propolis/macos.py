@@ -21,22 +21,28 @@ _KEY_DOWN_MASK = 1 << 10
 # Shift, Control, Option and Command. A key typed with any of these isn't a
 # plain key.
 _MODIFIERS = (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20)
+_COMMAND = 1 << 20
 _DELETE_KEY_CODE = 51
+_ARROW_KEY_CODES = {126: -1, 125: 1}  # Up and down
 
 
 class ListKeys:
-    """Plain keys typed while a list has focus: ``on_number(n)`` for 1 to 9,
-    and ``on_delete()`` for Delete.
+    """Keys typed while a list has focus: ``on_number(n)`` for 1 to 9,
+    ``on_delete()`` for Delete, and ``on_move(offset)`` for ⌘↑ (-1) and ⌘↓ (1).
 
     A key is swallowed only if its callback returns True. Keys typed into
     anything else, such as a text field or a web page, are left alone.
 
     This uses a local event monitor rather than menu shortcuts. A menu item
-    with a shortcut that has no modifier can swallow that key from text fields.
+    with a shortcut that has no modifier can swallow that key from text fields,
+    and one for ⌘↑ or ⌘↓ would swallow those from text fields and web pages.
     """
 
     def __init__(
-        self, on_number: Callable[[int], bool], on_delete: Callable[[], bool]
+        self,
+        on_number: Callable[[int], bool],
+        on_delete: Callable[[], bool],
+        on_move: Callable[[int], bool],
     ):
         self._monitor = None
         if not _MACOS:
@@ -45,11 +51,13 @@ class ListKeys:
         def handler(event):
             # Rubicon may hand over either a raw pointer or an ObjCInstance.
             event = event if isinstance(event, ObjCInstance) else ObjCInstance(event)
-            match _plain_key_in_list(event):
+            match _key_in_list(event):
                 case None:
                     handled = False
                 case "delete":
                     handled = on_delete()
+                case int(offset):
+                    handled = on_move(offset)
                 case number:
                     handled = on_number(int(number))
             # ctypes wants a plain address for a pointer result.
@@ -67,11 +75,16 @@ class ListKeys:
             self._monitor = None
 
 
-def _plain_key_in_list(event) -> str | None:
-    """"1" to "9" or "delete", typed with no modifier while a list has focus."""
-    if event.modifierFlags & _MODIFIERS:
+def _key_in_list(event) -> str | int | None:
+    """What was typed while a list has focus: "1" to "9" or "delete" with no
+    modifier, or -1 or 1 for ⌘↑ or ⌘↓."""
+    modifiers = event.modifierFlags & _MODIFIERS
+    key: str | int
+    if modifiers == _COMMAND and event.keyCode in _ARROW_KEY_CODES:
+        key = _ARROW_KEY_CODES[event.keyCode]
+    elif modifiers:
         return None
-    if event.keyCode == _DELETE_KEY_CODE:
+    elif event.keyCode == _DELETE_KEY_CODE:
         key = "delete"
     else:
         key = str(event.charactersIgnoringModifiers or "")
