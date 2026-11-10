@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package (macOS)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install Briefcase
+        run: pip install briefcase==0.4.7
+
+      - name: Set up macOS code-signing & notarization
+        uses: ./.github/actions/macos-signing-setup
+        with:
+          certificate: ${{ secrets.MACOS_CERTIFICATE }}
+          certificate-password: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          team-id: ${{ secrets.APPLE_TEAM_ID }}
+          asc-api-key: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          asc-api-key-id: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          asc-api-key-issuer: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER }}
+
+      - name: briefcase create
+        run: briefcase create
+
+      - name: briefcase build
+        run: briefcase build
+
+      # Sign, then submit to Apple for notarization without waiting for approval.
+      # Briefcase leaves a .notarization-request marker next to the .dmg, which
+      # the finalize job uses to resume.
+      - name: briefcase package
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: briefcase package --identity "$APPLE_SIGNING_IDENTITY" --no-wait
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Propolis-macOS
+          path: dist/*
+          if-no-files-found: error
+
+  finalize:
+    name: Finalize notarization (macOS)
+    needs: package
+    runs-on: macos-latest
+    # Apple usually approves within a few minutes. If this times out, re-run
+    # this job on its own; the .notarization-request marker is still in the
+    # artifact, so nothing gets rebuilt.
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install Briefcase
+        run: pip install briefcase==0.4.7
+
+      - name: Set up macOS code-signing & notarization
+        uses: ./.github/actions/macos-signing-setup
+        with:
+          certificate: ${{ secrets.MACOS_CERTIFICATE }}
+          certificate-password: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          team-id: ${{ secrets.APPLE_TEAM_ID }}
+          asc-api-key: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          asc-api-key-id: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          asc-api-key-issuer: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER }}
+
+      - name: Download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: Propolis-macOS
+          path: dist
+
+      # Resumes from the marker, taking the signing identity from it. Waits for
+      # Apple's approval, then staples the ticket onto the .dmg.
+      - name: Wait for notarization and staple
+        run: briefcase package --no-input
+
+      - name: Upload stapled artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Propolis-macOS
+          path: dist/*.dmg
+          if-no-files-found: error
+          overwrite: true
+
+  release:
+    name: Publish GitHub release
+    needs: finalize
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # Tag pushes release on the pushed tag; workflow_dispatch creates a CI
+      # prerelease with a generated tag so test runs aren't mistaken for releases.
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('ci-{0}', github.run_number) }}
+      IS_PRERELEASE: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: Propolis-macOS
+          path: artifacts
+
+      - name: Create GitHub release and attach the .dmg
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          prerelease: ${{ env.IS_PRERELEASE }}
+          generate_release_notes: true
+          files: artifacts/*
