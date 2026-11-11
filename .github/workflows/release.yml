@@ -49,8 +49,8 @@ jobs:
       # the finalize job uses to resume.
       - name: briefcase package
         env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: briefcase package --identity "$APPLE_TEAM_ID" --no-wait
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: briefcase package --identity "$APPLE_SIGNING_IDENTITY" --no-wait
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
