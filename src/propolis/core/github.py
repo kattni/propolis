@@ -150,6 +150,32 @@ class GitHub:
             for activity in _activities(event)
         ]
 
+    async def pushes(self, repo: str, number: int) -> list[Activity]:
+        """The latest pushes to a pull request's branch, as activity.
+
+        The timeline lists commits by git author, dated when they were made,
+        so it can't say who pushed them or when. The branch's own activity,
+        in the fork it comes from, can.
+        """
+        head = (await self._get(f"/repos/{repo}/pulls/{number}")).json()["head"]
+        if not head["repo"]:
+            # The fork has been deleted.
+            return []
+        # Newest first. A hundred is plenty between two checks.
+        response = await self._get(
+            f"/repos/{head['repo']['full_name']}/activity",
+            params={"ref": head["ref"], "activity_type": "push", "per_page": "100"},
+        )
+        return [
+            Activity(
+                at=parse_time(push["timestamp"]),
+                actor=push["actor"]["login"],
+                actor_is_bot=push["actor"].get("type") == "Bot",
+            )
+            for push in response.json()
+            if push["actor"]
+        ]
+
     async def issue(self, repo: str, number: int) -> ThreadInfo:
         """An issue or pull request's details, wherever it lives now: GitHub
         redirects to issues that have moved to another repo."""
@@ -314,7 +340,7 @@ def _activities(event: dict) -> Iterator[Activity]:
     match event.get("event"):
         case "committed":
             # Commits carry a git author, not a GitHub login, so there's no
-            # way to tell whose they are.
+            # way to tell whose they are. Pushes come from the branch instead.
             sources = []
         case "line-commented":
             sources = [

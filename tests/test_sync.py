@@ -133,6 +133,43 @@ async def test_sync_flags_activity_that_needs_a_response(
     ]
 
 
+async def test_sync_counts_pushes_to_a_pull_request(
+    store, github, fake_github, no_open_prs
+):
+    def pull_request(updated_at):
+        item = notification(5, updated_at)
+        item["subject"]["type"] = "PullRequest"
+        return item
+
+    fake_github.routes["GET", "/notifications"] = [
+        pull_request("2026-11-03T09:00:00Z")
+    ]
+    sync = Sync(store, github)
+    await sync.run_once()
+    store.mark_done("beeware/toga#5")
+
+    # The author pushes from their fork without commenting. The timeline
+    # doesn't say who pushed, but the branch's activity does.
+    fake_github.routes["GET", "/notifications"] = [
+        pull_request("2026-11-03T13:00:00Z")
+    ]
+    fake_github.routes["GET", "/repos/beeware/toga/issues/5/timeline"] = []
+    fake_github.routes["GET", "/repos/beeware/toga/pulls/5"] = {
+        "head": {"ref": "fix", "repo": {"full_name": "contributor/toga"}}
+    }
+    fake_github.routes["GET", "/repos/contributor/toga/activity"] = [
+        {
+            "activity_type": "push",
+            "timestamp": "2026-11-03T13:00:00Z",
+            "actor": {"login": "contributor", "type": "User"},
+        }
+    ]
+
+    await sync.run_once()
+
+    assert store.state.inbox() == ["beeware/toga#5"]
+
+
 async def test_sync_records_failing_ci_on_my_pull_requests(store, github, fake_github):
     def check(conclusion, at):
         return {"__typename": "CheckRun", "conclusion": conclusion, "completedAt": at}

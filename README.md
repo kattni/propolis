@@ -52,7 +52,7 @@ Propolis starts with eight labels: Needs review, Question, Deep response, Blocke
 ## Your data
 
 - **It stays on your Mac and on GitHub.** Propolis has no server. Your GitHub token is kept in your macOS Keychain, and your labels and triage history are in `~/Library/Application Support/com.kattni.propolis/`.
-- **Propolis asks GitHub for the `notifications` permission only.** With it, Propolis reads your notifications, marks them read or done, and subscribes you to threads you give a flagging label, so their activity reaches you. It reads timelines and CI checks on public repos, which needs no extra permission.
+- **Propolis asks GitHub for the `notifications` permission only.** With it, Propolis reads your notifications, marks them read or done, and subscribes you to threads you give a flagging label, so their activity reaches you. It reads timelines, pull request pushes and CI checks on public repos, which needs no extra permission.
 - **Private repos work, with less detail.** Their notifications appear, but GitHub doesn't let Propolis see who acted on them, so any update counts as activity. The same goes for discussions and releases.
 - **To sign out,** choose File → Sign Out of GitHub. To revoke Propolis's access completely, go to GitHub's Settings → Applications → Authorized OAuth Apps.
 

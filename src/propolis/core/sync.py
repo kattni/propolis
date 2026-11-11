@@ -127,6 +127,8 @@ class Sync:
             return notification.updated_at
         try:
             activities = await self._github.timeline(info.repo, info.number)
+            if info.kind == "PullRequest":
+                activities += await self._github.pushes(info.repo, info.number)
         except httpx2.HTTPStatusError as error:
             if error.response.status_code != 404:
                 raise
