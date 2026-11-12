@@ -49,9 +49,31 @@ To triage, select a thread and type a label's number (1 to 9, shown beside each 
 
 Propolis starts with eight labels: Needs review, Question, Deep response, Blocked, Low priority, High priority, In progress and Cold storage. Blocked and High priority flag on activity. You can change all of them. Only the first nine labels have a number key, so to give one of your own labels a number, select it in the sidebar and move it up with ⌘↑.
 
+## Using Propolis on more than one Mac
+
+Your Macs can share your labels and triage through a folder that they all sync, such as one in iCloud Drive or Dropbox. Only one of them needs to sign in to GitHub.
+
+1. On the Mac that's signed in, choose File → Sync Folder…, and choose or create a folder for Propolis, such as `Propolis` in iCloud Drive.
+2. On each other Mac, open Propolis. Either sign in to GitHub, or click **Use a Sync Folder…** and choose the same folder.
+
+A Mac that isn't signed in gets your notifications from a Mac that is, so its Inbox fills only while that Mac is running Propolis. What you do on it reaches GitHub the next time that Mac syncs. It can add issues and pull requests by number, but not discussions. To sign it in later, choose File → Sign In to GitHub…. To stop syncing, choose File → Stop Syncing with Other Macs.
+
+A sync folder is for one GitHub account's notifications. Propolis won't sync an account's history into another account's folder, so the two never mix.
+
+## Taking over someone else's inbox
+
+Propolis can triage more than one GitHub account's notifications, each with its own labels, history, sync folder and sign-in. To take over someone's inbox, starting from their history:
+
+1. On their Mac, they choose File → Sync Folder… in Propolis, and choose a folder that's shared with you, for example through Dropbox.
+2. On your Mac, choose File → Add Account…. The new account starts empty, apart from the default labels. Click **Use a Sync Folder…** and choose that folder.
+
+Their labels and triage come in, and nothing of yours goes to them. Their Mac stays signed in as them and keeps bringing in their notifications, so you never need their GitHub sign-in. To switch between your notifications and theirs, choose File → Switch Account. While you have more than one account, the window title shows whose notifications you're looking at.
+
+If you sign an account in instead, sign in as the account whose notifications it has. GitHub's sign-in page approves whichever account your browser is signed in to, and Propolis refuses a sign-in that doesn't match the account's history.
+
 ## Your data
 
-- **It stays on your Mac and on GitHub.** Propolis has no server. Your GitHub token is kept in your macOS Keychain, and your labels and triage history are in `~/Library/Application Support/com.kattni.propolis/`.
+- **It stays on your Mac and on GitHub.** Propolis has no server. Your GitHub token is kept in your macOS Keychain, and your labels and triage history are in `~/Library/Application Support/com.kattni.propolis/`. Each account you add has its own store in the `accounts` folder there, and its own Keychain entry. If you sync with other Macs, the sync folder also has your triage history, the titles of your threads and your GitHub username, but never your token.
 - **Propolis asks GitHub for the `notifications` permission only.** With it, Propolis reads your notifications, marks them read or done, and subscribes you to threads you give a flagging label, so their activity reaches you. It reads timelines, pull request pushes and CI checks on public repos, which needs no extra permission.
 - **Private repos work, with less detail.** Their notifications appear, but GitHub doesn't let Propolis see who acted on them, so any update counts as activity. The same goes for discussions and releases.
 - **To sign out,** choose File → Sign Out of GitHub. To revoke Propolis's access completely, go to GitHub's Settings → Applications → Authorized OAuth Apps.

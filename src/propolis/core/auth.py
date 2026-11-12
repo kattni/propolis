@@ -8,12 +8,13 @@ import httpx2
 import keyring
 from keyring.errors import PasswordDeleteError
 
+from propolis.core.accounts import DEFAULT
+
 CLIENT_ID = "Ov23ligJYqr0ZNQGPQhL"
 """Propolis's OAuth App. Device flow needs no client secret."""
 SCOPES = "notifications"
 
 _KEYRING_SERVICE = "com.kattni.propolis"
-_KEYRING_USER = "github"
 
 
 class SignInError(Exception):
@@ -30,8 +31,9 @@ class DeviceCode:
     interval: int
 
 
-async def sign_in(show_code: Callable[[DeviceCode], None]) -> str:
-    """Sign in to GitHub, store the token in the keychain, and return it.
+async def sign_in(show_code: Callable[[DeviceCode], None], account: str = DEFAULT) -> str:
+    """Sign in to GitHub, store the account's token in the keychain, and return
+    it.
 
     ``show_code`` is called with the code to show you. This then waits until
     you've approved Propolis on GitHub, or the code expires.
@@ -69,7 +71,7 @@ async def sign_in(show_code: Callable[[DeviceCode], None]) -> str:
             response.raise_for_status()
             result = response.json()
             if token := result.get("access_token"):
-                save_token(token)
+                save_token(token, account)
                 return token
             match result.get("error"):
                 case "authorization_pending":
@@ -81,16 +83,21 @@ async def sign_in(show_code: Callable[[DeviceCode], None]) -> str:
     raise SignInError("The sign-in code expired before it was approved.")
 
 
-def load_token() -> str | None:
-    return keyring.get_password(_KEYRING_SERVICE, _KEYRING_USER)
+def load_token(account: str = DEFAULT) -> str | None:
+    return keyring.get_password(_KEYRING_SERVICE, _keyring_user(account))
 
 
-def save_token(token: str) -> None:
-    keyring.set_password(_KEYRING_SERVICE, _KEYRING_USER, token)
+def save_token(token: str, account: str = DEFAULT) -> None:
+    keyring.set_password(_KEYRING_SERVICE, _keyring_user(account), token)
 
 
-def forget_token() -> None:
+def forget_token(account: str = DEFAULT) -> None:
     try:
-        keyring.delete_password(_KEYRING_SERVICE, _KEYRING_USER)
+        keyring.delete_password(_KEYRING_SERVICE, _keyring_user(account))
     except PasswordDeleteError:
         pass
+
+
+def _keyring_user(account: str) -> str:
+    # The first account keeps the entry Propolis has always used.
+    return "github" if account == DEFAULT else f"github:{account}"

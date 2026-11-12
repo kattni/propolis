@@ -16,11 +16,13 @@ import toga
 from toga.sources import AccessorColumn, ListSource
 from toga.style.pack import CENTER, COLUMN, RIGHT, ROW, Pack
 
+from propolis.core.accounts import Accounts
 from propolis.core.auth import DeviceCode, SignInError, forget_token, load_token, sign_in
+from propolis.core.folder import NotReady, SharedFolder, WrongAccount
 from propolis.core.github import GitHub
 from propolis.core.state import ATTENTION
 from propolis.core.store import Store
-from propolis.core.sync import Sync
+from propolis.core.sync import Sync, WrongSignIn
 from propolis.core.triage import AddError, Triage
 from propolis.macos import (
     ListKeys,
@@ -44,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 OCTICONS = Path(__file__).parent / "resources" / "octicons"
+ICLOUD_DRIVE = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
 
 
 class TypeColumn(AccessorColumn):
@@ -71,21 +74,25 @@ Select a thread to read it here.</body></html>"""
 
 THREAD = toga.Group("Thread", order=22)
 LABELS = toga.Group("Labels", order=25)
+ACCOUNTS = toga.Group("Switch Account", parent=toga.Group.FILE, section=2, order=1)
 
 
 class Propolis(toga.App):
     def startup(self):
         self.paths.data.mkdir(parents=True, exist_ok=True)
-        self.store = Store(self.paths.data / "propolis.db")
+        self.accounts = Accounts(self.paths.data)
+        self._open_store()
         self.github: GitHub | None = None
         self.sync: Sync | None = None
         self.triage: Triage | None = None
         self.view = INBOX
         self._syncing = False
         self._poller: asyncio.Task | None = None
+        self._signing_in: asyncio.Task | None = None
         self._shown: str | None = None
         self._numbered: dict[int, str] = {}
         self._label_commands: list[toga.Command] = []
+        self._account_commands: list[toga.Command] = []
         self._list_keys = ListKeys(self._on_number, self._on_delete, self._on_move)
         disable_window_tabs()
 
@@ -95,7 +102,8 @@ class Propolis(toga.App):
             self._refresh,
             "Refresh",
             shortcut=toga.Key.MOD_1 + "r",
-            tooltip="Sync with GitHub now. Propolis also syncs every minute.",
+            tooltip="Sync with GitHub and your other Macs now. Propolis also "
+            "syncs every minute.",
             group=toga.Group.VIEW,
         )
         self.add_thread_command = toga.Command(
@@ -178,11 +186,45 @@ class Propolis(toga.App):
             section=1,
             order=3,
         )
+        self.sign_in_command = toga.Command(
+            self._sign_in_again,
+            "Sign In to GitHub…",
+            tooltip="Sign in, so this Mac syncs with GitHub itself, not only with "
+            "your other Macs.",
+            group=toga.Group.FILE,
+        )
         self.sign_out_command = toga.Command(
             self._sign_out,
             "Sign Out of GitHub",
             tooltip="Forget the saved GitHub sign-in.",
             group=toga.Group.FILE,
+        )
+        self.sync_folder_command = toga.Command(
+            self._choose_sync_folder,
+            "Sync Folder…",
+            tooltip="Choose a folder that your Macs share, such as one in iCloud "
+            "Drive or Dropbox, to sync your labels and triage between them. Only "
+            "one of them needs to sign in to GitHub.",
+            group=toga.Group.FILE,
+            section=1,
+        )
+        self.add_account_command = toga.Command(
+            self._add_account,
+            "Add Account…",
+            tooltip="Triage another GitHub account's notifications, such as those "
+            "of someone whose inbox you're taking over, with labels and history "
+            "of its own. Sign it in, or use the sync folder of a Mac that's signed "
+            "in to it.",
+            group=toga.Group.FILE,
+            section=2,
+        )
+        self.stop_sync_folder_command = toga.Command(
+            self._stop_sync_folder,
+            "Stop Syncing with Other Macs",
+            tooltip="Stop using the sync folder. Its files stay where they are.",
+            group=toga.Group.FILE,
+            section=1,
+            order=1,
         )
         self.clear_filters_command = toga.Command(
             self._clear_filters,
@@ -210,10 +252,15 @@ class Propolis(toga.App):
             self.delete_label_command,
             self.move_up_command,
             self.move_down_command,
+            self.sign_in_command,
             self.sign_out_command,
+            self.sync_folder_command,
+            self.stop_sync_folder_command,
+            self.add_account_command,
             self.clear_filters_command,
             self.shortcuts_command,
         )
+        self._rebuild_account_commands()
         self._shortcuts_window: toga.Window | None = None
         self._filters = Filters()
         self._filter_options = None
@@ -221,21 +268,27 @@ class Propolis(toga.App):
 
         self.main_window = toga.MainWindow(size=(1200, 800))
         self.main_window.content = toga.Box()
-        self._set_signed_in(False)
+        self._set_ready(False)
         self.main_window.show()
 
     async def on_running(self):
-        if token := load_token():
-            await self._start(token)
-        else:
-            self._show_sign_in()
+        await self._open_account()
 
     async def on_exit(self):
         self._list_keys.remove()
         await self._finish_tasks()
         await self._close_github()
+        self._push_to_folder()
         self.store.close()
         return True
+
+    def _push_to_folder(self):
+        """Share anything since the last sync with your other Macs."""
+        if self.folder:
+            try:
+                self.folder.push()
+            except (OSError, NotReady):
+                logger.exception("Couldn't write to the sync folder")
 
     async def _finish_tasks(self):
         """Cancel every other task and wait for it to end, as ``asyncio.run``
@@ -254,7 +307,7 @@ class Propolis(toga.App):
     # Signing in and out
 
     def _show_sign_in(self, message: str = ""):
-        self._set_signed_in(False)
+        self._set_ready(False)
         self.main_window.title = self.formal_name
         self._verification_uri = None
         centred = Pack(text_align=CENTER)
@@ -270,13 +323,33 @@ class Propolis(toga.App):
         self.open_github_button = toga.Button(
             "Open GitHub", on_press=self._open_verification, enabled=False
         )
-        intro = "Sign in to GitHub to triage your notifications."
+        if login := self.store.get_meta("login"):
+            intro = f"Sign in to GitHub as {login} to triage their notifications."
+        else:
+            intro = "Sign in to GitHub to triage your notifications."
+        if self.folder:
+            other_macs = (
+                "Or carry on without signing in. Your triage syncs with your other "
+                "Macs, and a Mac that's signed in brings in your notifications."
+            )
+            without_github = "Continue Without Signing In"
+        else:
+            other_macs = (
+                "Or, if another Mac signed in to Propolis syncs through a shared "
+                "folder, use that folder. This Mac then doesn't need to sign in."
+            )
+            without_github = "Use a Sync Folder…"
         panel = toga.Box(
             children=[
                 toga.Label(f"{message}\n\n{intro}" if message else intro, style=centred),
                 toga.Label("Enter this code at github.com/login/device:", style=centred),
                 self.code_label,
                 self.open_github_button,
+                toga.Label(
+                    textwrap.fill(other_macs, 56),
+                    style=Pack(text_align=CENTER, margin=(28, 0, 8)),
+                ),
+                toga.Button(without_github, on_press=self._use_without_github),
             ],
             style=Pack(direction=COLUMN, width=380, gap=4),
         )
@@ -284,7 +357,7 @@ class Propolis(toga.App):
             children=[panel],
             style=Pack(direction=COLUMN, justify_content=CENTER, align_items=CENTER),
         )
-        asyncio.create_task(self._sign_in())
+        self._signing_in = asyncio.create_task(self._sign_in())
 
     def _show_code(self, code: DeviceCode):
         self.code_label.text = code.user_code
@@ -297,7 +370,7 @@ class Propolis(toga.App):
 
     async def _sign_in(self):
         try:
-            token = await sign_in(self._show_code)
+            token = await sign_in(self._show_code, self.accounts.current)
         except (SignInError, httpx2.HTTPError) as error:
             await self.main_window.dialog(
                 toga.ErrorDialog("Couldn't sign in", str(error))
@@ -306,20 +379,29 @@ class Propolis(toga.App):
             return
         await self._start(token)
 
-    async def _start(self, token: str):
-        self.github = GitHub(token)
-        self.sync = Sync(self.store, self.github)
+    async def _use_without_github(self, widget, **kwargs):
+        if self.folder is None and not await self._ask_for_sync_folder():
+            return
+        if self._signing_in:
+            self._signing_in.cancel()
+        await self._start(None)
+
+    async def _start(self, token: str | None):
+        """Show your triage, and sync with GitHub if there's a token, and with
+        your other Macs if there's a sync folder."""
+        self.github = GitHub(token) if token else None
+        self.sync = Sync(self.store, self.github, self.folder)
         self.triage = Triage(self.store, self.github)
         self._show_main()
         self._rebuild_label_commands()
-        self._set_signed_in(True)
+        self._set_ready(True)
         self._reload()
         await self._refresh()
         self._poller = asyncio.create_task(self._poll())
 
     async def _poll(self):
         """Sync in the background, as often as GitHub allows."""
-        while self.github is not None:
+        while self.sync is not None:
             await asyncio.sleep(self._poll_delay())
             try:
                 await self._refresh()
@@ -329,10 +411,14 @@ class Propolis(toga.App):
                 self.status.text = "Sync failed; see the log"
 
     def _poll_delay(self) -> float:
-        return self.github.poll_interval
+        return self.github.poll_interval if self.github else 60
+
+    async def _sign_in_again(self, command, **kwargs):
+        await self._close_github()
+        self._show_sign_in()
 
     async def _sign_out(self, command, **kwargs):
-        forget_token()
+        forget_token(self.accounts.current)
         await self._close_github()
         self._show_sign_in()
 
@@ -346,24 +432,28 @@ class Propolis(toga.App):
             await self.github.aclose()
         self.github = self.sync = self.triage = None
 
-    def _set_signed_in(self, signed_in: bool):
+    def _set_ready(self, ready: bool):
+        """Enable the commands that work once your triage is showing."""
         for command in [
             self.refresh_command,
             self.add_thread_command,
             self.open_command,
             self.done_command,
             self.new_label_command,
-            self.sign_out_command,
+            self.sync_folder_command,
             self.clear_filters_command,
             *self._label_commands,
         ]:
-            command.enabled = signed_in
-        self._enable_view_commands(signed_in)
+            command.enabled = ready
+        self.sign_in_command.enabled = ready and self.github is None
+        self.sign_out_command.enabled = ready and self.github is not None
+        self.stop_sync_folder_command.enabled = ready and self.folder is not None
+        self._enable_view_commands(ready)
 
-    def _enable_view_commands(self, signed_in: bool = True):
+    def _enable_view_commands(self, ready: bool = True):
         """Commands that depend on the selected view."""
-        self.unlabel_command.enabled = signed_in and self.view != INBOX
-        editable = signed_in and self.view not in (INBOX, ATTENTION)
+        self.unlabel_command.enabled = ready and self.view != INBOX
+        editable = ready and self.view not in (INBOX, ATTENTION)
         for command in [
             self.edit_label_command,
             self.delete_label_command,
@@ -464,7 +554,12 @@ class Propolis(toga.App):
         self._show_rows(rows(self.store, self.view, self._filters))
         name = next(item.name for item in items if item.view == self.view)
         filtered = " (filtered)" if self._filters.active else ""
-        self.main_window.title = f"{name}{filtered} – {self.formal_name}"
+        account = (
+            f" – {self._account_name(self.accounts.current)}"
+            if len(self.accounts.names) > 1
+            else ""
+        )
+        self.main_window.title = f"{name}{filtered}{account} – {self.formal_name}"
         self._enable_view_commands()
 
     def _show_rows(self, new_rows: list[ThreadRow]):
@@ -508,18 +603,145 @@ class Propolis(toga.App):
             await self.sync.run_once()
         except httpx2.HTTPStatusError as error:
             if error.response.status_code == 401:
-                forget_token()
+                forget_token(self.accounts.current)
                 await self._close_github()
                 self._show_sign_in("GitHub no longer accepts the saved sign-in.")
                 return
             self.status.text = f"Sync failed: GitHub returned {error.response.status_code}"
         except (httpx2.HTTPError, RuntimeError) as error:
             self.status.text = f"Sync failed: {error}"
+        except WrongSignIn as error:
+            forget_token(self.accounts.current)
+            await self._close_github()
+            self._show_sign_in(str(error))
+            return
+        except WrongAccount as error:
+            # Nothing was merged, so forgetting the folder undoes choosing it.
+            await self._forget_sync_folder()
+            await self.main_window.dialog(
+                toga.ErrorDialog("Couldn't use that sync folder", str(error))
+            )
+            return
+        except (OSError, NotReady) as error:
+            self.status.text = f"Couldn't sync with your other Macs: {error}"
         else:
-            self.status.text = f"Last synced at {datetime.now():%H:%M}"
+            if (login := self.store.get_meta("login")) != self.accounts.names[
+                self.accounts.current
+            ]:
+                self.accounts.name(self.accounts.current, login)
+                self._rebuild_account_commands()
+            synced = f"Last synced at {datetime.now():%H:%M}"
+            if self.github is None:
+                synced += (
+                    ". This Mac isn't signed in to GitHub, so your notifications "
+                    "come from a Mac that is."
+                )
+            self.status.text = synced
         finally:
             self._syncing = False
         self._reload()
+
+    # Syncing with your other Macs
+
+    async def _choose_sync_folder(self, command, **kwargs):
+        if await self._ask_for_sync_folder():
+            self._set_ready(True)
+            await self._refresh()
+
+    async def _ask_for_sync_folder(self) -> bool:
+        """Ask for the folder to sync through. Returns whether one was chosen."""
+        path = await self.main_window.dialog(
+            toga.SelectFolderDialog(
+                "Choose a folder your Macs share, such as one in iCloud Drive",
+                initial_directory=ICLOUD_DRIVE if ICLOUD_DRIVE.is_dir() else None,
+            )
+        )
+        if path is None:
+            return False
+        self.store.set_meta("shared_folder", str(path))
+        self.folder = SharedFolder(self.store, Path(path))
+        if self.sync:
+            self.sync.folder = self.folder
+        return True
+
+    async def _stop_sync_folder(self, command, **kwargs):
+        await self._forget_sync_folder()
+
+    async def _forget_sync_folder(self):
+        self.store.set_meta("shared_folder", "")
+        self.folder = None
+        if self.github is None:
+            # Without GitHub or your other Macs, there's nothing to sync with.
+            await self._close_github()
+            self._show_sign_in()
+            return
+        self.sync.folder = None
+        self._set_ready(True)
+
+    # Accounts
+
+    def _open_store(self):
+        self.store = Store(self.accounts.path(self.accounts.current))
+        folder = self.store.get_meta("shared_folder")
+        self.folder = SharedFolder(self.store, Path(folder)) if folder else None
+
+    async def _open_account(self):
+        """Sync with GitHub if the account is signed in, and with your other
+        Macs if it has a sync folder. Otherwise, ask it to sign in."""
+        if token := load_token(self.accounts.current):
+            await self._start(token)
+        elif self.folder:
+            await self._start(None)
+        else:
+            self._show_sign_in()
+
+    async def _add_account(self, command, **kwargs):
+        await self._switch_account(self.accounts.add())
+
+    async def _switch_account(self, account: str):
+        if self._signing_in:
+            self._signing_in.cancel()
+        await self._close_github()
+        while self._syncing:
+            # A sync under way finishes with the store it started with.
+            await asyncio.sleep(0.1)
+        self._push_to_folder()
+        self.store.close()
+        self.accounts.switch(account)
+        self._open_store()
+        self.view = INBOX
+        self._shown = None
+        self._filters = Filters()
+        self._filter_options = None
+        self._rebuild_account_commands()
+        self._rebuild_label_commands()
+        await self._open_account()
+
+    def _account_name(self, account: str) -> str:
+        return self.accounts.names.get(account) or "New account"
+
+    def _rebuild_account_commands(self):
+        """A Switch Account menu, with the open account dimmed."""
+        for command in self._account_commands:
+            del self.commands[command.id]
+        self._account_commands = [
+            toga.Command(
+                self._account_command_action(account),
+                self._account_name(account),
+                group=ACCOUNTS,
+                order=order,
+                id=f"account:{account}",
+                enabled=account != self.accounts.current,
+            )
+            for order, account in enumerate(self.accounts.names)
+        ]
+        self.commands.add(*self._account_commands)
+
+    def _account_command_action(self, account: str):
+        async def switch(command, **kwargs):
+            await self._switch_account(account)
+
+        return switch
 
     # Filters
 

@@ -85,11 +85,15 @@ def parse_time(value: str | None) -> datetime | None:
 
 
 class GitHub:
-    def __init__(self, token: str, transport: httpx2.AsyncBaseTransport | None = None):
+    def __init__(
+        self, token: str | None, transport: httpx2.AsyncBaseTransport | None = None
+    ):
+        """Without a token, only GitHub's public API is available."""
+        auth = {"Authorization": f"Bearer {token}"} if token else {}
         self._http = httpx2.AsyncClient(
             base_url=API,
             headers={
-                "Authorization": f"Bearer {token}",
+                **auth,
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
                 "User-Agent": "Propolis",

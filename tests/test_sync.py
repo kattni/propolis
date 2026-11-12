@@ -3,9 +3,11 @@ from datetime import UTC, datetime
 
 import pytest
 
+from propolis.core.folder import SharedFolder, WrongAccount
 from propolis.core.state import ATTENTION
 from propolis.core.store import Store
 from propolis.core.sync import Sync
+from propolis.core.triage import Triage
 
 pytestmark = pytest.mark.anyio
 
@@ -249,3 +251,49 @@ async def test_sync_finds_discussions_by_their_title(store, github, fake_github)
     assert store.info("beeware/toga#7").url == (
         "https://github.com/beeware/toga/discussions/7"
     )
+
+
+async def test_a_mac_without_github_syncs_through_a_shared_folder(
+    tmp_path, github, fake_github, no_open_prs
+):
+    fake_github.routes["GET", "/notifications"] = [
+        notification(1, "2026-11-03T10:00:00Z")
+    ]
+    fake_github.routes["DELETE", "/notifications/threads/91"] = {}
+    folder = tmp_path / "shared"
+    folder.mkdir()
+
+    with Store(tmp_path / "a.db") as a, Store(tmp_path / "b.db") as b:
+        signed_in = Sync(a, github, SharedFolder(a, folder))
+        not_signed_in = Sync(b, None, SharedFolder(b, folder))
+
+        # The Mac that's signed in shares the thread, and its details.
+        await signed_in.run_once()
+        await not_signed_in.run_once()
+        assert b.state.inbox() == ["beeware/toga#1"]
+        assert b.info("beeware/toga#1").title == "Thread 1"
+
+        # Triage on the other Mac reaches GitHub through it.
+        await Triage(b, None).done("beeware/toga#1")
+        await not_signed_in.run_once()
+        await signed_in.run_once()
+
+    assert a.state.threads["beeware/toga#1"].done
+    assert ("DELETE", "/notifications/threads/91") in fake_github.requests
+
+
+async def test_sync_wont_mix_two_github_accounts(tmp_path, github):
+    folder = tmp_path / "shared"
+    folder.mkdir()
+    with Store(tmp_path / "theirs.db") as theirs:
+        theirs.record_activity("beeware/toga#1", datetime(2026, 11, 3, 10, tzinfo=UTC))
+        shared = SharedFolder(theirs, folder)
+        shared.pull(signed_in_as="alex")
+        shared.push()
+
+    # This Mac is signed in as kattni, and the folder is alex's.
+    with Store(tmp_path / "mine.db") as mine:
+        with pytest.raises(WrongAccount):
+            await Sync(mine, github, SharedFolder(mine, folder)).run_once()
+        assert mine.state.threads == {}
+        assert not list(folder.glob(f"{mine.device}*"))

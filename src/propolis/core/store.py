@@ -1,7 +1,8 @@
 """The event log on disk, and the only way to change triage state."""
 
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Set
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -38,6 +39,9 @@ CREATE TABLE IF NOT EXISTS event (
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+_LONG_AGO = datetime.min.replace(tzinfo=UTC)
 
 
 class Store:
@@ -121,7 +125,35 @@ class Store:
             )
         )
 
-    # Local caches. Unlike events, these aren't synced between devices.
+    # Syncing with your other devices
+
+    def merge(self, events: Iterable[Event]) -> list[Event]:
+        """Add events from your other devices. Returns the ones that are new
+        here."""
+        with self._db:
+            new = [
+                event
+                for event in events
+                if self._db.execute(
+                    "INSERT OR IGNORE INTO event VALUES (?, ?, ?, ?, ?)", to_row(event)
+                ).rowcount
+            ]
+        if new:
+            # They can be from any time, so replay, but only once.
+            self._rebuild()
+        return new
+
+    def events_except(self, ids: Set[str]) -> list[Event]:
+        """Every event but these, in the order they were recorded here."""
+        return [
+            from_row(*row)
+            for row in self._db.execute(
+                "SELECT id, at, device, kind, data FROM event ORDER BY rowid"
+            )
+            if row[0] not in ids
+        ]
+
+    # Thread details. Unlike events, these are a cache: the latest wins.
 
     def info(self, key: str) -> ThreadInfo | None:
         row = self._db.execute(
@@ -129,12 +161,46 @@ class Store:
         ).fetchone()
         return ThreadInfo.from_json(row[0]) if row else None
 
-    def save_info(self, info: ThreadInfo) -> None:
-        with self._db:
-            self._db.execute(
-                "INSERT OR REPLACE INTO thread_info VALUES (?, ?)",
-                (info.key, info.to_json()),
+    def all_info(self) -> list[ThreadInfo]:
+        return [
+            ThreadInfo.from_json(data)
+            for (data,) in self._db.execute(
+                "SELECT data FROM thread_info ORDER BY key"
             )
+        ]
+
+    def save_info(self, info: ThreadInfo) -> None:
+        """Save details just fetched from GitHub."""
+        previous = self.info(info.key)
+        if previous and _details(previous) == _details(info):
+            fetched_at = previous.fetched_at or self._clock()
+        else:
+            fetched_at = self._clock()
+        with self._db:
+            self._write_info(replace(info, fetched_at=fetched_at))
+
+    def merge_info(self, infos: Iterable[ThreadInfo]) -> bool:
+        """Take details from your other devices for threads this device has no
+        details for, or older or poorer ones. Returns whether any changed."""
+        changed = False
+        with self._db:
+            for info in infos:
+                local = self.info(info.key)
+                if local is None or _better(info, local):
+                    if local:
+                        # How far this device has checked the thread is its own.
+                        info = replace(info, checked_until=local.checked_until)
+                    self._write_info(info)
+                    changed = True
+        return changed
+
+    def _write_info(self, info: ThreadInfo) -> None:
+        self._db.execute(
+            "INSERT OR REPLACE INTO thread_info VALUES (?, ?)",
+            (info.key, info.to_json()),
+        )
+
+    # Settings and sync positions, for this device only.
 
     def get_meta(self, key: str) -> str | None:
         row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
@@ -184,3 +250,17 @@ class Store:
             device = uuid4().hex
             self.set_meta("device", device)
         return device
+
+
+def _details(info: ThreadInfo) -> ThreadInfo:
+    """What GitHub says about a thread, without what Propolis adds."""
+    return replace(info, checked_until=None, fetched_at=None)
+
+
+def _better(shared: ThreadInfo, local: ThreadInfo) -> bool:
+    """Whether another device's details for a thread should replace this
+    device's. Details from a notification are richer, and otherwise the
+    newest win."""
+    if bool(shared.notification_id) != bool(local.notification_id):
+        return bool(shared.notification_id)
+    return (shared.fetched_at or _LONG_AGO) > (local.fetched_at or _LONG_AGO)

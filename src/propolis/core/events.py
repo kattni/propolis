@@ -110,3 +110,17 @@ def from_row(id: str, at: str, device: str, kind: str, data: str) -> Event:
     return KINDS[kind](
         id=id, at=datetime.fromisoformat(at), device=device, **json.loads(data)
     )
+
+
+def to_json(event: Event) -> str:
+    """The event as one line of JSON, for the shared folder."""
+    data = {field.name: getattr(event, field.name) for field in fields(event)}
+    return json.dumps(
+        {**data, "at": event.at.isoformat(), "kind": type(event).__name__}
+    )
+
+
+def from_json(line: str | bytes) -> Event:
+    data = json.loads(line)
+    kind = KINDS[data.pop("kind")]
+    return kind(**{**data, "at": datetime.fromisoformat(data["at"])})

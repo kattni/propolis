@@ -1,4 +1,4 @@
-"""Bringing GitHub activity into the Store."""
+"""Bringing GitHub activity, and your other devices' triage, into the Store."""
 
 from dataclasses import replace
 from datetime import datetime
@@ -6,27 +6,68 @@ from datetime import datetime
 import httpx2
 
 from propolis.core.activity import needs_response
+from propolis.core.events import Event
+from propolis.core.folder import SharedFolder
 from propolis.core.github import GitHub, Notification, parse_time
 from propolis.core.store import Store
+from propolis.core.triage import Triage
+
+
+class WrongSignIn(Exception):
+    """The store is for a different GitHub account from the one signed in."""
 
 
 class Sync:
-    def __init__(self, store: Store, github: GitHub):
+    def __init__(
+        self,
+        store: Store,
+        github: GitHub | None,
+        folder: SharedFolder | None = None,
+    ):
+        """Sync with GitHub, unless ``github`` is None because this device
+        isn't signed in, and with your other devices through ``folder``."""
         self._store = store
         self._github = github
+        self.folder = folder
+        self._triage = Triage(store, github)
         self._me: str | None = None
         self._read_whole_inbox = False
+        self._to_write_back: list[Event] = []
 
     async def run_once(self) -> None:
-        """Fetch what's changed on GitHub and record any activity that counts.
+        """Catch up with your other devices, then fetch what's changed on
+        GitHub and record any activity that counts, then share what's new.
 
         The first run reads your whole GitHub inbox, and later runs only what's
         changed since.
         """
-        if self._me is None:
-            self._me = await self._github.me()
-        await self._sync_notifications()
-        await self._sync_ci()
+        if self._github is not None and self._me is None:
+            me = await self._github.me()
+            # Its history is one account's, and can't be taken apart again.
+            if (known := self._store.get_meta("login")) and known != me:
+                raise WrongSignIn(
+                    f"This account is {known}'s, but it's signed in to GitHub as "
+                    f"{me}. Sign in as {known}, or add an account for {me} with "
+                    "File → Add Account…."
+                )
+            self._store.set_meta("login", me)
+            self._me = me
+        # Catch up first. Placing a thread that another device has just
+        # labelled would flag it.
+        pulled = self.folder.pull(signed_in_as=self._me) if self.folder else []
+        try:
+            if self._github is not None:
+                self._to_write_back += pulled
+                await self._sync_notifications()
+                await self._sync_ci()
+                # Your other devices may not be signed in to GitHub, so their
+                # triage reaches GitHub through this one. Doing it after
+                # syncing means the state it goes by is up to date.
+                await self._triage.write_back_events(self._to_write_back)
+                self._to_write_back = []
+        finally:
+            if self.folder:
+                self.folder.push()
 
     async def _sync_ci(self) -> None:
         # A failure keeps the timestamp of the check that failed, so seeing it
