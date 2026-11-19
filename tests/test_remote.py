@@ -98,6 +98,7 @@ def test_triaging_through_another_mac():
         return changes
 
     changes = asyncio.run(go())
+    host.close()
     assert changes == [
         "moved 1 notification to Waiting",
         "added the label Later",
@@ -108,8 +109,10 @@ def test_triaging_through_another_mac():
 
 
 def test_a_wrong_code_is_refused():
+    host = Store(":memory:")
+
     async def go():
-        server, client, _ = await serve(Store(":memory:"), None, code="other")
+        server, client, _ = await serve(host, None, code="other")
         try:
             with pytest.raises(NotPaired, match="doesn't accept the code"):
                 await client.state()
@@ -118,6 +121,7 @@ def test_a_wrong_code_is_refused():
             server.stop()
 
     asyncio.run(go())
+    host.close()
 
 
 def test_stopping_turns_away_open_connections():
