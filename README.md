@@ -305,7 +305,7 @@ prerelease instead.
 | `src/propolis/activity.py` | Whether a bit of activity needs a response from you |
 | `src/propolis/actions.py` | Changing threads in the store, and on GitHub or the other Mac, best effort |
 | `src/propolis/remote.py` | Sharing an inbox: the local API Propolis on another Mac talks to, one endpoint per action, and the client for triaging through another Mac |
-| `src/propolis/github.py` | A small async client for GitHub's API (using httpx): notifications, timelines and pushes, failing checks, finding discussions, looking up whether issues and pull requests are open (with the GraphQL API), and turning API URLs into github.com links |
+| `src/propolis/github.py` | A small async client for GitHub's API (using httpx2): notifications, timelines and pushes, failing checks, finding discussions, looking up whether issues and pull requests are open (with the GraphQL API), and turning API URLs into github.com links |
 | `src/propolis/auth.py` | Signing in to GitHub with OAuth device flow |
 | `src/propolis/accounts.py` | The GitHub accounts Propolis triages, each with its own store, or on another Mac |
 | `src/propolis/store.py` | An inbox's views and triage, kept in SQLite as an event log beside what GitHub says about each thread, or copied from another Mac |

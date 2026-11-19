@@ -12,7 +12,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import httpx
+import httpx2
 
 #: The client ID of Propolis's OAuth App, which has Device Flow enabled.
 CLIENT_ID = "Ov23ligJYqr0ZNQGPQhL"
@@ -44,14 +44,14 @@ async def sign_in(
     show_code: Callable[[DeviceCode], None],
     *,
     client_id: str = CLIENT_ID,
-    transport: httpx.AsyncBaseTransport | None = None,
+    transport: httpx2.AsyncBaseTransport | None = None,
 ) -> str:
     """Sign in to GitHub, and return the token.
 
     ``show_code`` is called with the code to show. This then waits until you've
     approved the app on GitHub, or the code expires.
     """
-    async with httpx.AsyncClient(
+    async with httpx2.AsyncClient(
         base_url="https://github.com",
         headers={"Accept": "application/json"},
         transport=transport,
@@ -98,6 +98,6 @@ async def sign_in(
                         raise CodeExpired("The code expired.")
                     case error:
                         raise SignInError(result.get("error_description") or error)
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             raise SignInError(f"Couldn't reach GitHub ({exc}).") from exc
     raise CodeExpired("The code expired.")

@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 
 from .actions import add_thread, apply_to_threads, label_threads
 from .github import GitHubError, reference
@@ -420,12 +420,12 @@ class RemoteClient:
         url: str,
         code: str,
         *,
-        transport: httpx.AsyncBaseTransport | None = None,
+        transport: httpx2.AsyncBaseTransport | None = None,
     ):
         """:raises ValueError: If ``url`` isn't an address Propolis can use."""
         self.url = check_address(url)
         self.host = urlsplit(self.url).hostname
-        self._http = httpx.AsyncClient(
+        self._http = httpx2.AsyncClient(
             base_url=self.url + API,
             headers={"Authorization": f"Bearer {code}", "User-Agent": "Propolis"},
             timeout=60,
@@ -435,10 +435,10 @@ class RemoteClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+    async def _request(self, method: str, path: str, **kwargs) -> httpx2.Response:
         try:
             response = await self._http.request(method, path, **kwargs)
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             raise RemoteError(f"Couldn't reach {self.host}: {exc}") from exc
 
         status = response.status_code
@@ -499,5 +499,5 @@ class RemoteClient:
         await self.action("unsubscribe", threads=[thread_id])
 
 
-def _is_json(response: httpx.Response) -> bool:
+def _is_json(response: httpx2.Response) -> bool:
     return response.headers.get("content-type", "").startswith("application/json")

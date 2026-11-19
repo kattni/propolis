@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from urllib.parse import quote_plus, urlsplit
 
-import httpx
+import httpx2
 
 from .activity import Activity, needs_response
 from .store import MANUAL_PREFIX, Thread, stamp
@@ -356,9 +356,9 @@ class InboxSnapshot:
 
 class GitHubClient:
     def __init__(
-        self, token: str, *, transport: httpx.AsyncBaseTransport | None = None
+        self, token: str, *, transport: httpx2.AsyncBaseTransport | None = None
     ):
-        self._http = httpx.AsyncClient(
+        self._http = httpx2.AsyncClient(
             base_url=API_URL,
             headers={
                 "Accept": "application/vnd.github+json",
@@ -373,10 +373,10 @@ class GitHubClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
+    async def _request(self, method: str, url: str, **kwargs) -> httpx2.Response:
         try:
             response = await self._http.request(method, url, **kwargs)
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             raise GitHubError(f"Couldn't reach GitHub ({exc}).") from exc
 
         status = response.status_code

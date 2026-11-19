@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-import httpx
+import httpx2
 import pytest
 
 from propolis.github import (
@@ -89,7 +89,7 @@ def run(client_call):
 
 
 def client_for(handler):
-    return GitHubClient("t0ken", transport=httpx.MockTransport(handler))
+    return GitHubClient("t0ken", transport=httpx2.MockTransport(handler))
 
 
 def test_inbox_pages_and_polling_headers():
@@ -99,8 +99,8 @@ def test_inbox_pages_and_polling_headers():
         seen.append(request)
         assert request.headers["Authorization"] == "Bearer t0ken"
         if request.url.params.get("page") == "2":
-            return httpx.Response(200, json=[notification(3)])
-        return httpx.Response(
+            return httpx2.Response(200, json=[notification(3)])
+        return httpx2.Response(
             200,
             json=[notification(1), notification(2)],
             headers={
@@ -127,7 +127,7 @@ def test_inbox_pages_and_polling_headers():
 def test_inbox_not_modified():
     def handler(request):
         assert request.headers["If-Modified-Since"] == "then"
-        return httpx.Response(304, headers={"X-Poll-Interval": "60"})
+        return httpx2.Response(304, headers={"X-Poll-Interval": "60"})
 
     snapshot = run(client_for(handler).inbox("then"))
     assert snapshot.threads is None
@@ -136,13 +136,13 @@ def test_inbox_not_modified():
 
 def test_errors():
     def unauthorized(request):
-        return httpx.Response(401, json={"message": "Bad credentials"})
+        return httpx2.Response(401, json={"message": "Bad credentials"})
 
     with pytest.raises(AuthenticationError):
         run(client_for(unauthorized).mark_read("1"))
 
     def forbidden(request):
-        return httpx.Response(403, json={"message": "Nope"})
+        return httpx2.Response(403, json={"message": "Nope"})
 
     with pytest.raises(GitHubError, match="Nope"):
         run(client_for(forbidden).mark_done("1"))
@@ -151,8 +151,8 @@ def test_errors():
 def test_validate_rejects_token_without_notifications_access():
     def handler(request):
         if request.url.path == "/user":
-            return httpx.Response(200, json={"login": "octocat"})
-        return httpx.Response(403, json={"message": "Resource not accessible"})
+            return httpx2.Response(200, json={"login": "octocat"})
+        return httpx2.Response(403, json={"message": "Resource not accessible"})
 
     with pytest.raises(AuthenticationError, match="notifications"):
         run(client_for(handler).validate())
@@ -197,13 +197,13 @@ def test_latest_activity_needs_a_response(events, pushes, expected):
     def handler(request):
         path = request.url.path
         if path.endswith("/issues/7/timeline"):
-            return httpx.Response(200, json=events)
+            return httpx2.Response(200, json=events)
         if path == "/repos/beeware/toga/pulls/7":
             head = {"ref": "fix", "repo": {"full_name": "them/toga"}}
-            return httpx.Response(200, json={"head": head})
+            return httpx2.Response(200, json={"head": head})
         assert path == "/repos/them/toga/activity"
         assert request.url.params["ref"] == "fix"
-        return httpx.Response(200, json=pushes)
+        return httpx2.Response(200, json=pushes)
 
     assert run(client_for(handler).latest_activity(pull, SINCE, "me")) == expected
 
@@ -227,7 +227,7 @@ def test_ci_failures():
             pull(1, context("SUCCESS")),
             pull(2, context("FAILURE"), context("TIMED_OUT", "2026-11-03T00:00:00Z")),
         ]
-        return httpx.Response(200, json={"data": {"search": {"nodes": pulls}}})
+        return httpx2.Response(200, json={"data": {"search": {"nodes": pulls}}})
 
     [failure] = run(client_for(handler).ci_failures())
     assert (failure.number, failure.failed_at) == (2, "2026-11-03T00:00:00Z")
@@ -239,7 +239,7 @@ def test_actions_use_the_right_endpoints():
 
     def handler(request):
         calls.append((request.method, request.url.path))
-        return httpx.Response(205 if request.method == "PATCH" else 204)
+        return httpx2.Response(205 if request.method == "PATCH" else 204)
 
     async def go():
         client = client_for(handler)
@@ -290,7 +290,7 @@ def test_lookup_finds_pull_requests_and_discussions():
     def handler(request):
         path = request.url.path
         if path == "/repos/BeeWare/Toga/issues/7":
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "title": "Faster tables",
@@ -301,7 +301,7 @@ def test_lookup_finds_pull_requests_and_discussions():
                 },
             )
         if path == "/repos/beeware/toga/discussions/9":
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "title": "Roadmap",
@@ -309,7 +309,7 @@ def test_lookup_finds_pull_requests_and_discussions():
                     "repository_url": API,
                 },
             )
-        return httpx.Response(404, json={"message": "Not Found"})
+        return httpx2.Response(404, json={"message": "Not Found"})
 
     async def go():
         client = client_for(handler)
@@ -345,7 +345,7 @@ def test_states():
         }
         issue = {"__typename": "Issue", "state": "CLOSED", "stateReason": "NOT_PLANNED"}
         pull = {"__typename": "PullRequest", "state": "MERGED", "isDraft": False}
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "data": {
