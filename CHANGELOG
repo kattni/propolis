@@ -1,5 +1,10 @@
 # Propolis Release Notes
 
+## 0.1.2 (19 Nov 2026)
+
+* No changes to the app. The tests now close the stores they open, so they
+  pass with warnings treated as errors.
+
 ## 0.1.1 (19 Nov 2026)
 
 * Propolis now talks to GitHub, and to Propolis on your other Macs, using
