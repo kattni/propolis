@@ -1,11 +1,12 @@
-"""What the UI shows, worked out from the Store. Nothing here imports Toga."""
+"""What the UI shows, worked out from the triage state. Nothing here imports
+Toga."""
 
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Protocol
 
-from propolis.core.state import ATTENTION
-from propolis.core.store import Store
+from propolis.core.state import ATTENTION, State
 from propolis.core.threads import ThreadInfo
 
 INBOX = "inbox"
@@ -46,6 +47,16 @@ REASONS = {
 watching the repo; ``manual`` means you subscribed to the thread itself."""
 
 
+class Source(Protocol):
+    """Where the state comes from: a Store, a Triage, or a Remote, for
+    triaging through Propolis on another Mac."""
+
+    @property
+    def state(self) -> State: ...
+
+    def info(self, key: str) -> ThreadInfo | None: ...
+
+
 @dataclass(frozen=True)
 class SidebarItem:
     view: str
@@ -79,14 +90,14 @@ class ThreadRow:
     url: str | None
 
 
-def sidebar(store: Store) -> list[SidebarItem]:
+def sidebar(source: Source) -> list[SidebarItem]:
     """The Inbox, then Attention required, then the labels you can apply.
 
     Labels you can apply are numbered 1 to 9 in order: the defaults first, then
     yours in the order you made them. Attention required is applied by
     Propolis, not by you, so it has no number.
     """
-    state = store.state
+    state = source.state
 
     def item(view: str, name: str, keys: list[str], number: int | None = None):
         new = sum(state.threads[key].new_activity for key in keys)
@@ -141,13 +152,13 @@ class FilterOptions:
     """Each type, and its name."""
 
 
-def filter_options(store: Store) -> FilterOptions:
+def filter_options(source: Source) -> FilterOptions:
     """The repos, reasons and types among threads in any view."""
-    state = store.state
+    state = source.state
     keys = set(state.inbox())
     for label_id in state.labels:
         keys.update(state.labelled(label_id))
-    infos = [info for key in keys if (info := store.info(key))]
+    infos = [info for key in keys if (info := source.info(key))]
 
     def named(values: set[str], names: dict[str, str]) -> list[tuple[str, str]]:
         return sorted(
@@ -162,13 +173,13 @@ def filter_options(store: Store) -> FilterOptions:
     )
 
 
-def rows(store: Store, view: str, filters: Filters = Filters()) -> list[ThreadRow]:
-    state = store.state
+def rows(source: Source, view: str, filters: Filters = Filters()) -> list[ThreadRow]:
+    state = source.state
     keys = state.inbox() if view == INBOX else state.labelled(view)
     result = []
     for key in keys:
         thread = state.threads[key]
-        info = store.info(key)
+        info = source.info(key)
         if not filters.matches(info):
             continue
         when = thread.last_activity if view == INBOX else thread.labels[view]

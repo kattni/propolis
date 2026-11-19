@@ -23,6 +23,7 @@ test_sources = [
 ]
 
 requires = [
+    "h11>=0.16",
     "httpx2>=2.16",
     "keyring>=25",
 ]

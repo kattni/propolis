@@ -84,20 +84,33 @@ async def sign_in(show_code: Callable[[DeviceCode], None], account: str = DEFAUL
 
 
 def load_token(account: str = DEFAULT) -> str | None:
-    return keyring.get_password(_KEYRING_SERVICE, _keyring_user(account))
+    return load_secret(_keyring_user(account))
 
 
 def save_token(token: str, account: str = DEFAULT) -> None:
-    keyring.set_password(_KEYRING_SERVICE, _keyring_user(account), token)
+    save_secret(_keyring_user(account), token)
 
 
 def forget_token(account: str = DEFAULT) -> None:
-    try:
-        keyring.delete_password(_KEYRING_SERVICE, _keyring_user(account))
-    except PasswordDeleteError:
-        pass
+    forget_secret(_keyring_user(account))
 
 
 def _keyring_user(account: str) -> str:
     # The first account keeps the entry Propolis has always used.
     return "github" if account == DEFAULT else f"github:{account}"
+
+
+def load_secret(name: str) -> str | None:
+    """A secret Propolis keeps in the keychain, such as a pairing code."""
+    return keyring.get_password(_KEYRING_SERVICE, name)
+
+
+def save_secret(name: str, value: str) -> None:
+    keyring.set_password(_KEYRING_SERVICE, name, value)
+
+
+def forget_secret(name: str) -> None:
+    try:
+        keyring.delete_password(_KEYRING_SERVICE, name)
+    except PasswordDeleteError:
+        pass
