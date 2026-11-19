@@ -10,6 +10,10 @@ from propolis.core.github import GitHub, Notification, parse_time
 from propolis.core.store import Store
 
 
+class WrongSignIn(Exception):
+    """The store is for a different GitHub account from the one signed in."""
+
+
 class Sync:
     def __init__(self, store: Store, github: GitHub):
         self._store = store
@@ -24,7 +28,16 @@ class Sync:
         changed since.
         """
         if self._me is None:
-            self._me = await self._github.me()
+            me = await self._github.me()
+            # Its history is one account's, and can't be taken apart again.
+            if (known := self._store.get_meta("login")) and known != me:
+                raise WrongSignIn(
+                    f"This account is {known}'s, but it's signed in to GitHub as "
+                    f"{me}. Sign in as {known}, or add an account for {me} with "
+                    "File → Add Account…."
+                )
+            self._store.set_meta("login", me)
+            self._me = me
         await self._sync_notifications()
         await self._sync_ci()
 

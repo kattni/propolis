@@ -1,7 +1,7 @@
 """What Propolis knows about each thread from GitHub."""
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 
 
@@ -26,14 +26,23 @@ class ThreadInfo:
     ``ci_failure`` for a pull request found only through CI polling."""
 
     def to_json(self) -> str:
+        return json.dumps(self.to_dict())
+
+    def to_dict(self) -> dict:
         data = asdict(self)
         if self.checked_until:
             data["checked_until"] = self.checked_until.isoformat()
-        return json.dumps(data)
+        return data
 
     @classmethod
     def from_json(cls, text: str) -> "ThreadInfo":
-        data = json.loads(text)
-        if data["checked_until"]:
+        return cls.from_dict(json.loads(text))
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ThreadInfo":
+        # Ignore anything a newer version of Propolis on another Mac added.
+        known = {field.name for field in fields(cls)}
+        data = {name: value for name, value in data.items() if name in known}
+        if data.get("checked_until"):
             data["checked_until"] = datetime.fromisoformat(data["checked_until"])
         return cls(**data)

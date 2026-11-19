@@ -7,7 +7,9 @@ from collections.abc import Awaitable, Callable
 import httpx2
 
 from propolis.core.github import GitHub
+from propolis.core.state import State
 from propolis.core.store import Store
+from propolis.core.threads import ThreadInfo
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +21,22 @@ class AddError(Exception):
 
 
 class Triage:
+    """Your triage: its state, and what you can do to it.
+
+    ``Remote`` has the same interface, for triaging through Propolis on another
+    Mac, so the app works the same with either.
+    """
+
     def __init__(self, store: Store, github: GitHub):
         self._store = store
         self._github = github
+
+    @property
+    def state(self) -> State:
+        return self._store.state
+
+    def info(self, key: str) -> ThreadInfo | None:
+        return self._store.info(key)
 
     async def add(self, reference: str) -> str:
         """Add an issue or pull request, given as ``owner/repo#123``, to the
@@ -72,6 +87,18 @@ class Triage:
     async def done(self, key: str) -> None:
         self._store.mark_done(key)
         await self._write_back(self._github.mark_done, key)
+
+    async def define_label(
+        self, name: str, flag_on_activity: bool = False, label_id: str | None = None
+    ) -> str:
+        """Create a label, or with ``label_id``, change one. Returns its ID."""
+        return self._store.define_label(name, flag_on_activity, label_id)
+
+    async def delete_label(self, label_id: str) -> None:
+        self._store.delete_label(label_id)
+
+    async def reorder_labels(self, order: list[str]) -> None:
+        self._store.reorder_labels(order)
 
     async def _write_back(
         self, call: Callable[[str], Awaitable[None]], key: str

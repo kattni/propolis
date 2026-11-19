@@ -78,18 +78,20 @@ Propolis signs in with OAuth device flow. This needs a GitHub **OAuth App**: Git
 Scopes:
 - `notifications`: read notifications, mark them read or done, and manage thread subscriptions.
 - No `repo` scope. Reading public repos' timelines and checks needs no scope. Notifications from private repos still appear, and marking them read or done works, but their timelines are hidden, so any update counts as activity. Seeing who acted would need `repo`, which grants full read and write access to private repos.
-- `gist`: added later, for sync.
+- Nothing for triaging through another Mac, which goes through Propolis there rather than through GitHub.
 
 ## Architecture
 
 - `propolis.core`: pure Python with no Toga imports. It holds the domain model, storage, the activity logic, sync, triage with write-back, sign-in, and the GitHub client (async `httpx2`). It's developed test-first with pytest, at a few agreed seams. GitHub interactions are tested against a fake GitHub (`httpx2.MockTransport` serving small hand-written JSON), never the live API.
-- Thread details from GitHub (title, link, notification ID, GitHub's latest reason for notifying you, how far each thread has been checked) are cached in the same SQLite database. They aren't events and aren't synced: each device fetches its own. The startup sync's read of the whole inbox refreshes them, so when the details gain a field, existing threads catch up the next time Propolis starts. A pull request known only through CI polling has the reason "Failing CI".
+- Thread details from GitHub (title, link, notification ID, GitHub's latest reason for notifying you, how far each thread has been checked) are cached in the same SQLite database. They aren't events. Propolis on another Mac gets them, with the state, from the Mac it triages through. The startup sync's read of the whole inbox refreshes them, so when the details gain a field, existing threads catch up the next time Propolis starts. A pull request known only through CI polling has the reason "Failing CI".
+- Accounts: Propolis can triage more than one GitHub account's notifications, such as yours and those of someone whose inbox you're taking over. One is open at a time. An account is either on this Mac, with its own store, and so its own labels and history, and its own token in the keychain, or it's on another Mac, through Propolis there. The first account keeps the original store, `propolis.db`, and keychain entry, `github`; others are `accounts/<id>.db` and `github:<id>`. `accounts.json` lists them by GitHub login, says which is open, and has the address of each one that's on another Mac. Its pairing code is in the keychain as `connect:<id>`, and the code of an account that's shared is `share:<id>`. A new account starts empty, apart from the default labels.
+- A store remembers the GitHub login it's for, and refuses a sign-in as anyone else. GitHub's device flow approves whichever account the browser is signed in to, so this is easy to get wrong.
 - `propolis.views`: pure Python with no Toga imports. It turns the Store's state into what the UI shows, and it's tested. This is where the UI's logic lives:
   - the sidebar's views, each with its number key, its thread count and how many have new activity, shown as "4   Blocked  (3, 1 new)";
   - each thread's row: its type as GitHub's Octicon (pull request, issue, discussion, release, commit, CI run, or a bell for anything else), title with a ● for new activity, repo, and when;
   - filtering: the repos, reasons and types to offer, and the rows that match.
 - `propolis.app`: Toga only, and kept to wiring, so it has no tests; it's checked by running it.
-  - Without a token in the keychain, the window shows the device-flow code and a button that opens GitHub. If GitHub rejects the token, the app forgets it and shows sign-in again.
+  - Without a token in the keychain, the window shows the device-flow code and a button that opens GitHub. If GitHub rejects the token, the app forgets it and shows sign-in again. For an account with no history yet, a second button connects to Propolis on another Mac instead.
   - Otherwise, the window has a sidebar of views on the left. On the right, the thread list sits above a web view showing the selected thread's GitHub page, so you can read and reply without leaving the app. A status line shows the last sync.
   - Selecting a thread counts as viewing it: its ● goes, and it's marked read on GitHub.
   - After you label, unlabel or finish a thread, the thread that takes its place is selected, so you can keep triaging from the keyboard.
@@ -109,6 +111,10 @@ Scopes:
   | Delete Label… for the label selected in the sidebar. It asks first, and says how many threads go back to the Inbox. It's a separate command with two modifiers, so it's hard to do by accident. | ⇧⌘⌫ |
   | Move Label Up / Down, which changes the number keys | ⌘↑ / ⌘↓, while the sidebar has focus |
   | Sign Out of GitHub | |
+  | Share This Inbox…: let Propolis on another Mac triage this account through this one. The window turns sharing on and off, and shows the pairing code, with a button for a new one. | |
+  | Disconnect from Other Mac, for an account that's on another Mac | |
+  | Add Account…: an empty account, which opens at the sign-in screen | |
+  | Switch Account: a submenu of accounts by GitHub login, with the open one dimmed. The window title shows the open account while there's more than one, or when it's on another Mac. | |
   | Clear Filters | ⌘F |
   | Keyboard Shortcuts (Help menu) | ⌘/ |
 
@@ -118,7 +124,7 @@ Scopes:
 
   Number keys aren't menu shortcuts: a menu item with a plain-number shortcut can swallow digits typed into text fields, including a comment box in the web view. A local event monitor handles them instead, and only when a list has focus.
 
-  The app syncs when it starts, then in the background on Toga's asyncio loop, as often as GitHub's `X-Poll-Interval` allows (currently 60 seconds). Refresh syncs at once. Each background sync is one conditional notifications request, which costs nothing against the rate limit when nothing has changed, plus the CI query. When a sync changes the list, the selected thread stays selected. If a background sync fails, the status line says so and polling carries on.
+  The app syncs when it starts, then in the background on Toga's asyncio loop, as often as GitHub's `X-Poll-Interval` allows (currently 60 seconds). Refresh syncs at once. Each background sync is one conditional notifications request, which costs nothing against the rate limit when nothing has changed, plus the CI query. When a sync changes the list, the selected thread stays selected. If a background sync fails, the status line says so and polling carries on. An account on another Mac doesn't poll GitHub. It keeps a request for changes open to that Mac instead, and Refresh has that Mac sync.
 
 ### Event-sourced storage
 
@@ -144,9 +150,24 @@ This costs little now, and it makes cross-device sync a matter of exchanging eve
 
 Because activity carries GitHub's timestamp, it can arrive after events that it precedes, and the store replays the log when that happens. A consequence is that activity which happened before you labelled a thread doesn't flag it, even if Propolis only notices it afterwards.
 
-## Sync (later)
+## Triaging through another Mac
 
-The planned backend is a private gist with one event-log file per device. It needs no server and no new account, and it uses the same GitHub token plus the `gist` scope. Each device writes only its own file, so writes never conflict. The logs will need occasional compaction as they grow. Placing a new thread in the Inbox records `ActivityDetected`, which flags the thread if it has a flagging label by then. So a device must catch up with the other devices' events before it places threads, or it could flag a thread that another device has just labelled.
+Propolis on a Mac that's signed in to GitHub can let Propolis on other Macs triage that account's notifications through it, with File → Share This Inbox…. Those Macs don't sign in to GitHub, and they keep nothing of their own. Each change goes straight to the sharing Mac, which records it in its store and writes it back to GitHub as if you'd made it there, and what they show is its state. There's only one copy of the history, so there's nothing to merge, and two people working on one inbox can't end up with different versions of it. The cost is that the sharing Mac has to be running Propolis, and reachable.
+
+The server, `propolis.core.remote.Server`, is a small HTTP/1.1 server on Toga's asyncio loop, using `h11`, so it works on the store directly, with no threads. It listens only on the Mac itself, on port 47615. A Cloudflare Tunnel reaches it from elsewhere: `cloudflared` on the sharing Mac connects out to Cloudflare, which gives it a public HTTPS address, so nothing is opened on the Mac's network. Cloudflare decrypts the traffic at its edge, so it can read it in passing.
+
+Because the address is public, every request carries the pairing code as a bearer token, and anything else gets a `401`. The code is 32 random characters, compared in constant time, and kept in the keychain on both Macs. Making a new code turns away any Mac using the old one, which goes back to its sign-in screen.
+
+The protocol is JSON, under `/v1`:
+
+- `GET /v1/state` returns the state: the labels in order, and each thread that's in a view, with its labels and when each was applied, its latest activity, when you last saw it, and its details. It also has the GitHub login the sharing Mac is signed in as, and a version.
+- `GET /v1/state?unless=<version>` waits while the state is still that version, for up to 50 seconds, then returns it, or `204` if it hasn't changed. The other Mac always has one of these open, so it hears of a change, from a sync or from triage on the sharing Mac, within a moment, at about one request a minute when nothing happens. Cloudflare gives up on a request after 100 seconds. The store calls back on each change. A burst of changes, such as a sync's, goes out together after 0.2 seconds. The version names the server as well as counting its changes, so a restart, which starts the count again, can't look like no change.
+- `POST /v1/view`, `done`, `label`, `unlabel`, `add`, `define-label`, `delete-label` and `reorder-labels` each do one triage action, given in a JSON body such as `{"thread": "beeware/toga#1"}`. The response has the new state, so the other Mac shows it at once. A thread or label the sharing Mac doesn't have is a `404`, and a thread that can't be added is a `422`, with the reason.
+- `POST /v1/refresh` syncs with GitHub now, for Refresh on the other Mac.
+
+On the other Mac, `propolis.core.remote.Remote` has the same interface as `Triage`, so the app works the same either way. If the sharing Mac can't be reached, an action fails with the reason in the status line, and the view keeps the last state while the app keeps trying. When the account opens, a screen with Try Again and Disconnect shows until the sharing Mac first answers.
+
+The web pane on the other Mac shows GitHub's pages as whoever is signed in to GitHub there, if anyone, not as the shared account. Threads in private repos that only the shared account can see won't open there.
 
 ## Platforms
 
@@ -162,4 +183,4 @@ macOS desktop first. Because the logic lives in `core`, mobile is mostly UI work
 3. Toga MVP: Inbox and label views, apply and remove labels, Done, open in browser, manual refresh.
 4. Label management: rename, reorder, delete, and flag on activity. Creating labels and background polling arrived early, in phase 3.
 5. Polish: filters by repo, reason and type. The `WebView` detail pane arrived early, in phase 3.
-6. Cross-device sync, then mobile.
+6. Triaging through Propolis on another Mac. Then mobile.

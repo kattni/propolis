@@ -46,6 +46,7 @@ class Store:
         self._db = sqlite3.connect(path)
         self._db.executescript(SCHEMA)
         self._clock = clock
+        self._watchers: list[Callable[[], None]] = []
         self.device = self._device_id()
         self._rebuild()
 
@@ -57,6 +58,12 @@ class Store:
 
     def __exit__(self, *exc_info) -> None:
         self.close()
+
+    def watch(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Call ``callback`` after each change to the triage state or to a
+        thread's details. Returns a function that stops it."""
+        self._watchers.append(callback)
+        return lambda: self._watchers.remove(callback)
 
     def define_label(
         self, name: str, flag_on_activity: bool = False, label_id: str | None = None
@@ -130,11 +137,14 @@ class Store:
         return ThreadInfo.from_json(row[0]) if row else None
 
     def save_info(self, info: ThreadInfo) -> None:
+        if self.info(info.key) == info:
+            return
         with self._db:
             self._db.execute(
                 "INSERT OR REPLACE INTO thread_info VALUES (?, ?)",
                 (info.key, info.to_json()),
             )
+        self._changed()
 
     def get_meta(self, key: str) -> str | None:
         row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
@@ -162,6 +172,11 @@ class Store:
             self._last = order(event)
         else:
             self._rebuild()
+        self._changed()
+
+    def _changed(self) -> None:
+        for callback in list(self._watchers):
+            callback()
 
     def _rebuild(self) -> None:
         events = sorted(
