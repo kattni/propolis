@@ -1,22 +1,22 @@
-"""Buzz's record of an inbox: its triage history, and what GitHub says about
+"""Propolis's record of an inbox: its triage history, and what GitHub says about
 its threads.
 
-Labels only exist in Buzz: GitHub has no API for organising notifications.
+Labels only exist in Propolis: GitHub has no API for organising notifications.
 
-Every thread in your GitHub inbox starts in Buzz's inbox. Giving it a label
+Every thread in your GitHub inbox starts in Propolis's inbox. Giving it a label
 moves it out of the inbox and into that label, where it stays, in the order you
 labelled it, however much activity it gets. Some labels flag on activity: when
 someone else acts on one of their threads, it's also put under Attention
 required, which works like a label. Other labels just show that there's
 something new on it.
 
-Only activity that needs a response from you counts (see `buzz.activity`). Buzz
-records when it happened, at GitHub's time, and when you last saw each thread,
-so it can tell what's new.
+Only activity that needs a response from you counts (see
+`propolis.activity`). Propolis records when it happened, at GitHub's time, and
+when you last saw each thread, so it can tell what's new.
 
-The triage history is a log of events (see `buzz.events`), each named with the
-device it was made on, and the triage state is what replaying them gives. What
-GitHub says about each thread is kept beside them, as a cache: each device
+The triage history is a log of events (see `propolis.events`), each named with
+the device it was made on, and the triage state is what replaying them gives.
+What GitHub says about each thread is kept beside them, as a cache: each device
 fetches its own.
 """
 
@@ -644,8 +644,8 @@ class Store(Inbox):
     ######################################################################
 
     def place(self, threads: Iterable[Thread]) -> None:
-        """Put threads Buzz hasn't had before in the inbox, at their place in
-        GitHub's order. Ones that are read on GitHub have nothing new."""
+        """Put threads Propolis hasn't had before in the inbox, at their place
+        in GitHub's order. Ones that are read on GitHub have nothing new."""
         new = [thread for thread in threads if thread.id not in self._threads]
         self._save(
             replace(thread, checked_until=stamp(thread.updated_at)) for thread in new
@@ -684,7 +684,7 @@ class Store(Inbox):
         It brings the thread back from done if it happened after the thread was
         done, and flags it for attention if it had a label that flags on
         activity by then. Activity from before you labelled it doesn't flag it,
-        even if Buzz only notices it afterwards. Recording the same activity
+        even if Propolis only notices it afterwards. Recording the same activity
         again changes nothing.
         """
         self._append([_activity(thread_id, stamp(at))])
@@ -697,7 +697,7 @@ class Store(Inbox):
     def mark_gone(self, listed: Iterable[str]) -> None:
         """Given every thread in GitHub's inbox, mark the inbox's other threads
         as done: they were marked as done somewhere else, such as on
-        github.com. Threads with a label are Buzz's to triage, so they stay
+        github.com. Threads with a label are Propolis's to triage, so they stay
         where they are, and so do threads added by hand, which were never in
         GitHub's inbox."""
         listed = set(listed)
@@ -750,10 +750,10 @@ class Store(Inbox):
     def add_manual(self, thread: Thread, seen: bool = True) -> str:
         """Add a thread that no notification has brought in, such as an issue
         looked up by its number. Returns its ID, which is the existing thread's
-        if Buzz already has this issue, pull request or discussion.
+        if Propolis already has this issue, pull request or discussion.
 
         :param seen: Whether you've seen it. A thread you add goes at the top of
-            the inbox with nothing new on it; one Buzz finds by itself has
+            the inbox with nothing new on it; one Propolis finds by itself has
             nothing on it until its activity is recorded.
         """
         if thread.id in self._threads:
@@ -823,11 +823,11 @@ class Store(Inbox):
         self._append([Adopted(**self._new(), thread_id=thread.id, previous=manual_id)])
 
     ######################################################################
-    # Sharing, with Buzz on another Mac
+    # Sharing, with Propolis on another Mac
     ######################################################################
 
     def snapshot(self) -> dict:
-        """Everything Buzz on another Mac needs to show this inbox, as
+        """Everything Propolis on another Mac needs to show this inbox, as
         JSON-ready data. (See `Mirror`.)"""
         return {
             "login": self.get_meta("login"),
@@ -926,7 +926,7 @@ class Mirror(Inbox):
                     done_at=thread["done_at"],
                 )
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
-            raise ValueError(f"That isn't a Buzz inbox ({exc!r}).") from exc
+            raise ValueError(f"That isn't a Propolis inbox ({exc!r}).") from exc
         self.state = State(labels=labels, threads=threads)
         self._threads = details
         self.login = snapshot.get("login")

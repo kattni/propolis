@@ -1,11 +1,11 @@
 """The events that make up an inbox's triage history.
 
 Events never change once made, and they're the source of truth: the triage
-state is whatever applying them in order gives (see `buzz.state`). Each one
+state is whatever applying them in order gives (see `propolis.state`). Each one
 names the device it was made on, which is the groundwork for devices to sync
 by exchanging events.
 
-Times are UTC, in the format of `buzz.store.now()`, so they sort as text.
+Times are UTC, in the format of `propolis.store.now()`, so they sort as text.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ class MarkedDone(Event):
 class ActivityDetected(Event):
     """Activity that needs a response from you happened on a thread.
 
-    ``at`` is when it happened on GitHub, not when Buzz noticed it.
+    ``at`` is when it happened on GitHub, not when Propolis noticed it.
     """
 
     thread_id: str
@@ -87,7 +87,8 @@ class Adopted(Event):
 
 @dataclass(frozen=True, kw_only=True)
 class Imported(Event):
-    """A thread's triage state, carried over from before Buzz kept events."""
+    """A thread's triage state, carried over from before Propolis kept
+    events."""
 
     thread_id: str
     #: Each of its labels, and when it was given.
@@ -131,7 +132,7 @@ def to_row(event: Event) -> tuple[str, str, str, str, str]:
 
 def from_row(id: str, at: str, device: str, kind: str, data: str) -> Event | None:
     """The event stored in a row, or None if it's of a kind this version of
-    Buzz doesn't know."""
+    Propolis doesn't know."""
     if (cls := KINDS.get(kind)) is None:
         return None
     known = {field.name for field in fields(cls)}

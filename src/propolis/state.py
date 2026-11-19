@@ -165,7 +165,7 @@ class State:
 
         Replayed in order, activity is always the thread's latest. Activity
         that isn't, which can only come from a thread imported from before
-        Buzz kept events, has happened already.
+        Propolis kept events, has happened already.
         """
         if thread.last_activity is not None and at <= thread.last_activity:
             return

@@ -1,8 +1,8 @@
-"""Sharing an inbox with Buzz on another Mac.
+"""Sharing an inbox with Propolis on another Mac.
 
 The Mac that's signed in to GitHub shares its inbox: it runs a `RemoteServer`,
 which listens only on that Mac. A tunnel you run, such as Cloudflare's, makes it
-reachable from elsewhere. Buzz on another Mac connects to it with a
+reachable from elsewhere. Propolis on another Mac connects to it with a
 `RemoteClient`, and the shared inbox becomes one of its accounts. Each change
 made there goes to the sharing Mac, which makes every GitHub request itself, so
 its GitHub sign-in never leaves it.
@@ -53,7 +53,7 @@ def new_code() -> str:
 
 
 class RemoteError(Exception):
-    """Why Buzz on the other Mac couldn't do something, in words for the user."""
+    """Why Propolis on the other Mac couldn't do something, in words for the user."""
 
 
 class NotPaired(RemoteError):
@@ -61,7 +61,7 @@ class NotPaired(RemoteError):
 
 
 ######################################################################
-# The sharing Mac: what Buzz on another Mac may do to this inbox
+# The sharing Mac: what Propolis on another Mac may do to this inbox
 ######################################################################
 
 
@@ -79,7 +79,7 @@ class BadRequest(Exception):
 
 
 class HostAPI:
-    """Carries out requests from Buzz on another Mac on this Mac's inbox.
+    """Carries out requests from Propolis on another Mac on this Mac's inbox.
 
     Deliberately narrow: it can read and triage the inbox and manage labels,
     but there's no way to read the GitHub sign-in, change settings, or stop
@@ -136,7 +136,7 @@ class HostAPI:
         store = self.store
 
         if action == "view":
-            # Seeing it in Buzz, and reading it on GitHub.
+            # Seeing it in Propolis, and reading it on GitHub.
             return await self._github(
                 request, store.mark_seen, lambda c, i: c.mark_read(i), "read {n}"
             )
@@ -206,7 +206,7 @@ class HostAPI:
         if it fails, the change here stands, and the failure is logged."""
         client = self.github()
         if client is None:
-            return Response(503, {"error": "That Buzz isn't connected to GitHub."})
+            return Response(503, {"error": "That Propolis isn't connected to GitHub."})
         threads = [t for i in _thread_ids(request) if (t := self.store.get(i))]
         failures = await apply_to_threads(self.store, client, threads, local, remote)
         if threads:
@@ -219,7 +219,7 @@ class HostAPI:
             raise BadRequest("reference must be text, like org/repo#123.")
         label_id = self._label_id(request) if request.get("label") else None
         if (client := self.github()) is None:
-            return Response(503, {"error": "That Buzz isn't connected to GitHub."})
+            return Response(503, {"error": "That Propolis isn't connected to GitHub."})
         try:
             thread = await add_thread(self.store, client, text, label_id)
         except GitHubError as exc:
@@ -315,7 +315,7 @@ class RemoteServer:
 
 
 class _Handler(BaseHTTPRequestHandler):
-    server_version = "Buzz"
+    server_version = "Propolis"
     protocol_version = "HTTP/1.1"
 
     def do_GET(self):
@@ -331,14 +331,16 @@ class _Handler(BaseHTTPRequestHandler):
         remote: RemoteServer = self.server.remote
         if remote.stopped:
             self.close_connection = True
-            self._send(Response(503, {"error": "Buzz there has stopped sharing."}))
+            self._send(Response(503, {"error": "Propolis there has stopped sharing."}))
             return
         given = self.headers.get("Authorization", "").encode()
         expected = f"Bearer {remote.code}".encode()
         if not remote.code or not hmac.compare_digest(given, expected):
             time.sleep(1)  # Make guessing slow.
             self._send(
-                Response(401, {"error": "Buzz on this Mac doesn't accept that code."})
+                Response(
+                    401, {"error": "Propolis on this Mac doesn't accept that code."}
+                )
             )
             return
         try:
@@ -407,7 +409,7 @@ def check_address(url: str) -> str:
 
 
 class RemoteClient:
-    """Triages through Buzz on another Mac.
+    """Triages through Propolis on another Mac.
 
     It has the same `mark_read`, `mark_done` and `unsubscribe` methods as
     `GitHubClient`, so the UI can use either.
@@ -420,12 +422,12 @@ class RemoteClient:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
-        """:raises ValueError: If ``url`` isn't an address Buzz can use."""
+        """:raises ValueError: If ``url`` isn't an address Propolis can use."""
         self.url = check_address(url)
         self.host = urlsplit(self.url).hostname
         self._http = httpx.AsyncClient(
             base_url=self.url + API,
-            headers={"Authorization": f"Bearer {code}", "User-Agent": "Buzz"},
+            headers={"Authorization": f"Bearer {code}", "User-Agent": "Propolis"},
             timeout=60,
             transport=transport,
         )
@@ -441,17 +443,17 @@ class RemoteClient:
 
         status = response.status_code
         if status == 401:
-            raise NotPaired(f"Buzz at {self.host} doesn't accept the code.")
+            raise NotPaired(f"Propolis at {self.host} doesn't accept the code.")
         if status in {301, 302, 303, 307, 308}:
             raise RemoteError(
-                f"{self.host} sent Buzz somewhere else, such as a sign-in page. "
-                "It needs to reach Buzz on the other Mac directly."
+                f"{self.host} sent Propolis somewhere else, such as a sign-in page. "
+                "It needs to reach Propolis on the other Mac directly."
             )
         tunnel = status in {502, 503, 504} or 520 <= status <= 530
         if tunnel and not _is_json(response):
-            # From the tunnel, which can't reach Buzz behind it.
+            # From the tunnel, which can't reach Propolis behind it.
             raise RemoteError(
-                f"{self.host} is there, but Buzz isn't answering through it. Is "
+                f"{self.host} is there, but Propolis isn't answering through it. Is "
                 "it open on the other Mac, and sharing?"
             )
         if status >= 400:
@@ -479,7 +481,7 @@ class RemoteClient:
             and isinstance(data.get("labels"), list)
             and isinstance(data.get("threads"), list)
         ):
-            raise RemoteError(f"{self.host} doesn't seem to be Buzz.")
+            raise RemoteError(f"{self.host} doesn't seem to be Propolis.")
         return data, response.headers.get("ETag")
 
     async def action(self, action: str, /, **params) -> dict:

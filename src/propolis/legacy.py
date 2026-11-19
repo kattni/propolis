@@ -1,8 +1,8 @@
-"""Bringing stores from before Buzz kept events up to date.
+"""Bringing stores from before Propolis kept events up to date.
 
 Those stores changed their tables in place. Their labels, and each thread's
 triage state, become events that come before any new ones, so replaying gives
-the same views, and Buzz carries on from there.
+the same views, and Propolis carries on from there.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from .events import (
 )
 from .state import ATTENTION, DEFAULT_LABELS
 
-#: When imported events happened: before everything else, so that what Buzz
+#: When imported events happened: before everything else, so that what Propolis
 #: does from now on applies on top of them.
 EPOCH = "1970-01-01T00:00:00.000000Z"
 
@@ -112,7 +112,7 @@ def upgrade(
 
     labels: dict[str, dict[str, str]] = {}
     for row in db.execute("SELECT rowid, * FROM thread_labels ORDER BY rowid"):
-        # Labels given before Buzz kept the time come first, in order.
+        # Labels given before Propolis kept the time come first, in order.
         if (label_id := ids.get(row["label_id"])) is None:
             continue
         given = time(row["added_at"]) or f"1970-01-01T00:00:00.{row['rowid']:06d}Z"
@@ -167,7 +167,7 @@ def _upgrade_to_1(db: sqlite3.Connection, stamp) -> None:
     labelled = "id IN (SELECT thread_id FROM thread_labels)"
     db.execute("UPDATE labels SET position = id")
     db.execute("UPDATE labels SET flag = 1 WHERE name IN ('Blocked', 'High priority')")
-    # Until then, Buzz went by GitHub's unread flag. Start from it.
+    # Until then, Propolis went by GitHub's unread flag. Start from it.
     rows = db.execute("SELECT id, unread, updated_at, done_mark FROM threads")
     db.executemany(
         "UPDATE threads SET last_activity = ?, seen_at = ?, checked_until = ?, "

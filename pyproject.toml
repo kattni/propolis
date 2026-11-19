@@ -1,22 +1,23 @@
 # This project was generated with 0.4.7 using template: https://github.com/beeware/briefcase-template @ v0.4.7
 [tool.briefcase]
-project_name = "Buzz"
-bundle = "com.example"
+project_name = "Propolis"
+bundle = "com.kattni"
 version = "0.1.0"
-url = "https://example.com/buzz"
+url = "https://github.com/kattni/propolis"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
-author = "Your Name"
-author_email = "you@example.com"
+author = "Kattni"
+author_email = "kattni@kattni.com"
 
-[tool.briefcase.app.buzz]
-formal_name = "Buzz"
+[tool.briefcase.app.propolis]
+formal_name = "Propolis"
 description = "A GitHub notifications inbox with labels"
-long_description = """Buzz keeps an inbox of your GitHub notifications, like the one on
-github.com, and lets you organise threads with your own labels.
+icon = "src/propolis/resources/propolis"
+long_description = """Propolis keeps an inbox of your GitHub notifications, like the
+one on github.com, and lets you organise threads with your own labels.
 """
 sources = [
-    "src/buzz",
+    "src/propolis",
 ]
 test_sources = [
     "tests",
@@ -30,7 +31,7 @@ test_requires = [
     "pytest",
 ]
 
-[tool.briefcase.app.buzz.macOS]
+[tool.briefcase.app.propolis.macOS]
 universal_build = true
 requires = [
     "toga-cocoa~=0.5.7",

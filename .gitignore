@@ -63,4 +63,7 @@ logs/
 
 # Briefcase local configuratoin
 .briefcase/
+
+# Virtual environments
 .venv/
+venv/

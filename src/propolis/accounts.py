@@ -1,4 +1,4 @@
-"""The GitHub accounts whose notifications Buzz triages on this Mac."""
+"""The GitHub accounts whose notifications Propolis triages on this Mac."""
 
 from __future__ import annotations
 
@@ -7,16 +7,16 @@ from pathlib import Path
 from uuid import uuid4
 
 DEFAULT = "default"
-"""The account Buzz started with. Its store and Keychain entries keep the names
-they've always had."""
+"""The account Propolis started with. Its store and Keychain entries keep the
+names they've always had."""
 
 
 class Accounts:
     """The GitHub accounts you triage. One is open at a time.
 
     An account is either on this Mac, with its own store, so its own labels and
-    history, and its own GitHub sign-in, or it's on another Mac, through Buzz
-    there. The list lives in ``accounts.json``, beside the stores.
+    history, and its own GitHub sign-in, or it's on another Mac, through
+    Propolis there. The list lives in ``accounts.json``, beside the stores.
     """
 
     def __init__(self, data: Path):
@@ -26,9 +26,9 @@ class Accounts:
             saved = json.loads(self._file.read_text(encoding="utf-8"))
         except (FileNotFoundError, ValueError):
             saved = {}
-        #: Each account's GitHub login, once Buzz knows it.
+        #: Each account's GitHub login, once Propolis knows it.
         self.names: dict[str, str | None] = saved.get("names") or {DEFAULT: None}
-        #: The address of Buzz on another Mac, for each account that's there
+        #: The address of Propolis on another Mac, for each account that's there
         #: rather than here.
         self.remotes: dict[str, str] = saved.get("remotes") or {}
         current = saved.get("current", DEFAULT)
@@ -37,7 +37,7 @@ class Accounts:
     def path(self, account: str) -> Path:
         """Where the account's store is."""
         if account == DEFAULT:
-            return self._data / "buzz.sqlite3"
+            return self._data / "propolis.sqlite3"
         (self._data / "accounts").mkdir(parents=True, exist_ok=True)
         return self._data / "accounts" / f"{account}.sqlite3"
 
@@ -56,8 +56,8 @@ class Accounts:
         self._save()
 
     def connect(self, account: str, url: str) -> None:
-        """Triage the account through Buzz at ``url``. Its store here, if it has
-        one, is left as it is."""
+        """Triage the account through Propolis at ``url``. Its store here, if it
+        has one, is left as it is."""
         self.remotes[account] = url
         self._save()
 

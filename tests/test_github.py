@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from buzz.github import (
+from propolis.github import (
     AuthenticationError,
     GitHubClient,
     GitHubError,

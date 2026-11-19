@@ -14,9 +14,7 @@ from dataclasses import dataclass
 
 import httpx
 
-#: The OAuth App's client ID. For now this is Propolis's OAuth App, so GitHub's
-#: sign-in page names Propolis. Register an OAuth App for Buzz, with Device
-#: Flow enabled, and put its client ID here.
+#: The client ID of Propolis's OAuth App, which has Device Flow enabled.
 CLIENT_ID = "Ov23ligJYqr0ZNQGPQhL"
 #: Reading notifications, marking them read or done, and managing
 #: subscriptions. Public repositories' timelines and checks need no scope.

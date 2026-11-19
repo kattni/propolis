@@ -3,8 +3,8 @@ from dataclasses import replace
 
 import pytest
 
-from buzz.state import DEFAULT_LABELS
-from buzz.store import ATTENTION, DONE, INBOX, UNREAD, Store, Thread
+from propolis.state import DEFAULT_LABELS
+from propolis.store import ATTENTION, DONE, INBOX, UNREAD, Store, Thread
 
 
 def thread(id, updated_at="2026-11-01T10:00:00Z", unread=True, title="A thread"):
@@ -35,7 +35,7 @@ class Clock:
 @pytest.fixture
 def clock(monkeypatch):
     clock = Clock()
-    monkeypatch.setattr("buzz.store.now", clock)
+    monkeypatch.setattr("propolis.store.now", clock)
     return clock
 
 
@@ -120,7 +120,7 @@ def test_done_elsewhere(store):
     store.set_label(label.id, ["3"], on=True)
 
     # Threads 1 and 3 aren't in GitHub's inbox any more, so they were marked as
-    # done on github.com. Thread 3 has a label, so it's Buzz's to triage.
+    # done on github.com. Thread 3 has a label, so it's Propolis's to triage.
     store.mark_gone(["2"])
     assert ids(store.threads(DONE)) == ["1"]
     assert ids(store.threads(label.id)) == ["3"]
@@ -147,8 +147,8 @@ def test_only_flagging_labels_flag_activity(store, clock):
     store.set_label(blocked.id, ["1"], on=True)
     store.set_label(later.id, ["2"], on=True)
 
-    # Activity from before it was labelled doesn't flag it, even if Buzz only
-    # notices it afterwards.
+    # Activity from before it was labelled doesn't flag it, even if Propolis
+    # only notices it afterwards.
     store.record_activity("1", "2026-11-09T00:00:00Z")
     assert store.threads(ATTENTION) == []
 
@@ -208,7 +208,7 @@ def test_labelled_threads_leave_the_inbox_for_good(store):
 
 
 def test_default_labels(tmp_path):
-    store = Store(tmp_path / "buzz.sqlite3")
+    store = Store(tmp_path / "propolis.sqlite3")
     labels = store.labels()
     assert [label.name for label in labels] == [n for _, n, _, _ in DEFAULT_LABELS]
     assert [label.name for label in labels if label.flag] == [
@@ -219,13 +219,13 @@ def test_default_labels(tmp_path):
     # Deleted defaults don't come back.
     store.delete_label(labels[0].id)
     store.close()
-    store = Store(tmp_path / "buzz.sqlite3")
+    store = Store(tmp_path / "propolis.sqlite3")
     assert len(store.labels()) == len(DEFAULT_LABELS) - 1
     store.close()
 
 
 def test_reopening_replays_the_same_triage(tmp_path, clock):
-    store = Store(tmp_path / "buzz.sqlite3")
+    store = Store(tmp_path / "propolis.sqlite3")
     store.place([thread("1")])
     waiting = store.create_label("Waiting", flag=True)
     store.set_label(waiting.id, ["1"], on=True)
@@ -235,7 +235,7 @@ def test_reopening_replays_the_same_triage(tmp_path, clock):
     store.set_attention(["1"], on=False)
     store.close()
 
-    store = Store(tmp_path / "buzz.sqlite3")
+    store = Store(tmp_path / "propolis.sqlite3")
     assert ids(store.threads(waiting.id)) == ["1"]
     assert store.threads(ATTENTION) == []
     store.close()

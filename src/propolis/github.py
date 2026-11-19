@@ -1,4 +1,4 @@
-"""A small async client for the parts of GitHub's API that Buzz uses:
+"""A small async client for the parts of GitHub's API that Propolis uses:
 notifications, the timelines and pushes that say who was active on a thread,
 and, with the GraphQL API, whether threads are open, which of your pull
 requests are failing CI, and which discussion a notification is about."""
@@ -363,7 +363,7 @@ class GitHubClient:
             headers={
                 "Accept": "application/vnd.github+json",
                 "Authorization": f"Bearer {token}",
-                "User-Agent": "Buzz-notifications-inbox",
+                "User-Agent": "Propolis-notifications-inbox",
                 "X-GitHub-Api-Version": "2022-11-28",
             },
             timeout=30,
@@ -446,7 +446,7 @@ class GitHubClient:
         )
 
     # A thread added by hand has no notification on GitHub, so marking it as
-    # read or done, or unsubscribing from it, only changes it in Buzz.
+    # read or done, or unsubscribing from it, only changes it in Propolis.
 
     async def mark_read(self, thread_id: str) -> None:
         if not is_manual(thread_id):

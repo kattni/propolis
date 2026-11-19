@@ -1,0 +1,57 @@
+name: Set up macOS code-signing & notarization
+description: >
+  Import the Developer ID Application cert into a dedicated keychain and store the
+  App Store Connect API key as the notarytool profile Briefcase looks for
+  (briefcase-macOS-<team_id>). Briefcase then signs + notarizes automatically.
+
+inputs:
+  certificate:
+    description: Base64-encoded Developer ID Application certificate (.p12).
+    required: true
+  certificate-password:
+    description: Password for the .p12 certificate.
+    required: true
+  team-id:
+    description: Apple Developer Team ID.
+    required: true
+  asc-api-key:
+    description: Base64-encoded App Store Connect API key (.p8).
+    required: true
+  asc-api-key-id:
+    description: App Store Connect API key ID.
+    required: true
+  asc-api-key-issuer:
+    description: App Store Connect API key issuer ID.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        MACOS_CERTIFICATE: ${{ inputs.certificate }}
+        MACOS_CERTIFICATE_PWD: ${{ inputs.certificate-password }}
+        APPLE_TEAM_ID: ${{ inputs.team-id }}
+        ASC_API_KEY: ${{ inputs.asc-api-key }}
+        ASC_API_KEY_ID: ${{ inputs.asc-api-key-id }}
+        ASC_API_KEY_ISSUER: ${{ inputs.asc-api-key-issuer }}
+      run: |
+        KC="$RUNNER_TEMP/signing.keychain-db"
+        KCPW="$(uuidgen)"
+        security create-keychain -p "$KCPW" "$KC"
+        security set-keychain-settings -lut 21600 "$KC"
+        security unlock-keychain -p "$KCPW" "$KC"
+
+        echo "$MACOS_CERTIFICATE" | base64 -D -o "$RUNNER_TEMP/cert.p12"
+        security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERTIFICATE_PWD" -A -t cert -f pkcs12 -k "$KC"
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC"
+
+        security list-keychains -d user -s "$KC" login.keychain-db
+        security default-keychain -d user -s "$KC"
+
+        echo "$ASC_API_KEY" | base64 -D -o "$RUNNER_TEMP/AuthKey.p8"
+        xcrun notarytool store-credentials "briefcase-macOS-$APPLE_TEAM_ID" \
+          --key "$RUNNER_TEMP/AuthKey.p8" \
+          --key-id "$ASC_API_KEY_ID" \
+          --issuer "$ASC_API_KEY_ISSUER" \
+          --keychain "$KC"

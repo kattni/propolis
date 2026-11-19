@@ -1,7 +1,7 @@
-"""Changing threads in Buzz, and on GitHub where it has an equivalent.
+"""Changing threads in Propolis, and on GitHub where it has an equivalent.
 
-Changes on GitHub are best effort: if one fails, the change in Buzz stands, and
-the failure is logged.
+Changes on GitHub are best effort: if one fails, the change in Propolis stands,
+and the failure is logged.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ async def add_thread(
 
     :param text: Like ``beeware/toga#123``, or a link to it on github.com.
     :param label_id: The label to put it in; without one, it goes to the inbox.
-    :raises ValueError: If ``text`` isn't a reference Buzz understands.
+    :raises ValueError: If ``text`` isn't a reference Propolis understands.
     :raises GitHubError: If GitHub can't find it.
     """
     repo, number = parse_reference(text)
@@ -92,7 +92,7 @@ async def apply_to_threads(
 
 def to_view(threads: Iterable[Thread]) -> list[Thread]:
     """The threads that viewing would change: those with something new on them
-    in Buzz, or that are unread on GitHub."""
+    in Propolis, or that are unread on GitHub."""
     return [thread for thread in threads if thread.new or thread.unread]
 
 

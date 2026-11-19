@@ -73,8 +73,9 @@ class Sync:
         await self.look_up_states()
 
     async def sync_inbox(self) -> None:
-        """Put threads that are new in GitHub's inbox in Buzz's, and check the
-        ones Buzz has for activity, if GitHub says they've been updated."""
+        """Put threads that are new in GitHub's inbox in Propolis's, and check
+        the ones Propolis has for activity, if GitHub says they've been
+        updated."""
         store, full = self.store, self._read_whole_inbox
         snapshot = await self.client.inbox(
             None if full else store.get_meta("last_modified"),
@@ -131,7 +132,7 @@ class Sync:
                 store.adopt(manual, thread)
                 known = store.get(thread.id)
             if known is None:
-                # Everything in GitHub's inbox that Buzz hasn't had before
+                # Everything in GitHub's inbox that Propolis hasn't had before
                 # starts in the inbox, whoever was active on it.
                 store.place([thread])
                 continue
@@ -165,8 +166,8 @@ class Sync:
 
     async def sync_ci(self) -> None:
         """Count a CI failure on one of your open pull requests as activity on
-        it, at the time the check failed. One Buzz doesn't have yet goes in the
-        inbox, with the reason "Failing CI".
+        it, at the time the check failed. One Propolis doesn't have yet goes in
+        the inbox, with the reason "Failing CI".
 
         The same failure, seen again, is the same activity, so it only counts
         once.

@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
-from buzz.github import CIFailure, InboxSnapshot, api_url
-from buzz.store import INBOX, Store, Thread
-from buzz.sync import Sync, WrongSignIn
+from propolis.github import CIFailure, InboxSnapshot, api_url
+from propolis.store import INBOX, Store, Thread
+from propolis.sync import Sync, WrongSignIn
 
 
 def notification(id, type="Issue", url=None, title="A thread"):
@@ -90,7 +90,7 @@ def test_failing_ci_counts_once(store):
     sync = Sync(store, FakeGitHub(failures=[failure]))
     asyncio.run(sync.run_once())
 
-    # A pull request Buzz didn't have goes in the inbox, with something new.
+    # A pull request Propolis didn't have goes in the inbox, with something new.
     [pull] = store.threads(INBOX)
     assert (pull.id, pull.reason, pull.new) == (
         "manual:beeware/toga#7",

@@ -170,13 +170,13 @@ def open_links_elsewhere(
         policy.open_elsewhere = open_elsewhere
         native.navigationDelegate = policy
         # A web view doesn't keep its delegate alive.
-        web_view._buzz_navigation_policy = policy
+        web_view._propolis_navigation_policy = policy
 
 
 @functools.cache
 def _navigation_policy_class():
     # Made the first time it's needed, so a problem making it fails quietly.
-    class BuzzNavigationPolicy(NSObject):
+    class PropolisNavigationPolicy(NSObject):
         toga_delegate = objc_property(weak=True)
         stays = objc_property(object)
         open_elsewhere = objc_property(object)
@@ -211,7 +211,7 @@ def _navigation_policy_class():
             if self.toga_delegate is not None:
                 self.toga_delegate.webView_didFinishNavigation_(web_view, navigation)
 
-    return BuzzNavigationPolicy
+    return PropolisNavigationPolicy
 
 
 def go_back(web_view: toga.WebView) -> None:
@@ -246,12 +246,12 @@ def watch_navigation(
         for key in ("URL", "canGoBack", "canGoForward", "loading", "title"):
             native.addObserver(observer, forKeyPath=key, options=0, context=None)
         # Observing something doesn't keep the observer alive.
-        web_view._buzz_navigation_observer = observer
+        web_view._propolis_navigation_observer = observer
 
 
 @functools.cache
 def _navigation_observer_class():
-    class BuzzNavigationObserver(NSObject):
+    class PropolisNavigationObserver(NSObject):
         on_change = objc_property(object)
 
         @objc_method
@@ -270,7 +270,7 @@ def _navigation_observer_class():
             except Exception:  # noqa: BLE001 -- don't take WebKit down too
                 traceback.print_exc()
 
-    return BuzzNavigationObserver
+    return PropolisNavigationObserver
 
 
 def _address(url) -> str:
@@ -349,7 +349,7 @@ def on_list_keys(
         token = ObjCClass("NSEvent").addLocalMonitorForEventsMatchingMask(
             _KEY_DOWN_MASK, handler=block
         )
-        table._buzz_key_monitor = (block, token)
+        table._propolis_key_monitor = (block, token)
 
 
 def _is_focused(native, window) -> bool:
@@ -444,7 +444,7 @@ def _pills_widget_class():
 @functools.cache
 def _pills_view_class():
     # A table cell view, so the table tells it when its row is selected.
-    class BuzzPillsView(ObjCClass("NSTableCellView")):
+    class PropolisPillsView(ObjCClass("NSTableCellView")):
         items = objc_property(object)
 
         @objc_method
@@ -467,7 +467,7 @@ def _pills_view_class():
             except Exception:  # noqa: BLE001 -- an empty cell beats a crash
                 traceback.print_exc()
 
-    return BuzzPillsView
+    return PropolisPillsView
 
 
 def _draw_pills(
@@ -703,12 +703,12 @@ def add_toolbar_menus(window: toga.MainWindow, menus: Sequence[ToolbarMenu]) -> 
         # Toga makes the items for its commands; this adds the menus.
         delegate.toga_delegate = native.toolbar.delegate
         delegate.menus = {menu.identifier: menu for menu in menus}
-        toolbar = ObjCClass("NSToolbar").alloc().initWithIdentifier("BuzzToolbar")
+        toolbar = ObjCClass("NSToolbar").alloc().initWithIdentifier("PropolisToolbar")
         toolbar.delegate = delegate
         native.toolbar = toolbar
         window._impl.native_toolbar = toolbar
         # A toolbar doesn't keep its delegate alive.
-        window._buzz_toolbar_delegate = delegate
+        window._propolis_toolbar_delegate = delegate
         # Changing the toolbar resizes the content, as Toga does when it does.
         if window.content is not None:
             window.content.refresh()
@@ -716,7 +716,7 @@ def add_toolbar_menus(window: toga.MainWindow, menus: Sequence[ToolbarMenu]) -> 
 
 @functools.cache
 def _toolbar_delegate_class():
-    class BuzzToolbarDelegate(NSObject):
+    class PropolisToolbarDelegate(NSObject):
         toga_delegate = objc_property(weak=True)
         menus = objc_property(object)
 
@@ -750,12 +750,12 @@ def _toolbar_delegate_class():
                 )
             )
 
-    return BuzzToolbarDelegate
+    return PropolisToolbarDelegate
 
 
 @functools.cache
 def _menu_delegate_class():
-    class BuzzMenuDelegate(NSObject):
+    class PropolisMenuDelegate(NSObject):
         items = objc_property(object)
         actions = objc_property(object)
 
@@ -773,7 +773,7 @@ def _menu_delegate_class():
             except Exception:  # noqa: BLE001 -- keep the app running
                 traceback.print_exc()
 
-    return BuzzMenuDelegate
+    return PropolisMenuDelegate
 
 
 def _fill_menu(menu, items: Sequence[MenuItem], target) -> list[Callable]:

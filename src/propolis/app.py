@@ -156,7 +156,7 @@ _MODIFIER_ORDER = ["mod 3", "mod 2", "shift", "mod 1"]
 
 @dataclass(eq=False)
 class RemoteInbox:
-    """An account's inbox on another Mac, triaged through Buzz there."""
+    """An account's inbox on another Mac, triaged through Propolis there."""
 
     client: RemoteClient
     #: A copy of the inbox, refreshed from the other Mac's.
@@ -250,7 +250,7 @@ def prune(cells: dict, keys: Iterable) -> None:
         del cells[key]
 
 
-class Buzz(toga.App):
+class Propolis(toga.App):
     ######################################################################
     # Dependencies (overridable, for trying the UI with fake data)
     ######################################################################
@@ -320,7 +320,7 @@ class Buzz(toga.App):
         # Shown while there's no inbox yet.
         self.nothing = Mirror()
         self.status_text = ""
-        # Letting Buzz on another Mac triage this account through this one.
+        # Letting Propolis on another Mac triage this account through this one.
         self.server: RemoteServer | None = None
         self.share_window: toga.Window | None = None
         self.last_remote_change = ""
@@ -421,7 +421,7 @@ class Buzz(toga.App):
             except ValueError:
                 client = None
             if client is None:
-                await self.disconnect_remote(f"Connect to Buzz at {url} again.")
+                await self.disconnect_remote(f"Connect to Propolis at {url} again.")
             else:
                 self.start_remote(client)
         elif self.token:
@@ -446,8 +446,8 @@ class Buzz(toga.App):
 
     @property
     def client(self):
-        """What changes the inbox being shown: GitHub, or Buzz on the other Mac
-        for an account that's there. None if not connected."""
+        """What changes the inbox being shown: GitHub, or Propolis on the other
+        Mac for an account that's there. None if not connected."""
         return self.remote.client if self.remote else self.github
 
     def login(self) -> str | None:
@@ -473,7 +473,7 @@ class Buzz(toga.App):
             "Refresh",
             shortcut=mod + "r",
             icon="resources/refresh",
-            tooltip="Check GitHub for new notifications now. Buzz also checks "
+            tooltip="Check GitHub for new notifications now. Propolis also checks "
             "about once a minute.",
             group=toga.Group.VIEW,
         )
@@ -608,7 +608,7 @@ class Buzz(toga.App):
             self.on_add_account,
             "Add Account…",
             tooltip="Triage another GitHub account's notifications, with labels "
-            "of its own. Sign it in to GitHub, or connect to Buzz on a Mac that's "
+            "of its own. Sign it in to GitHub, or connect to Propolis on a Mac that's "
             "signed in to it.",
             group=toga.Group.FILE,
             section=2,
@@ -616,7 +616,7 @@ class Buzz(toga.App):
         self.share_cmd = toga.Command(
             self.on_show_share,
             "Share This Inbox…",
-            tooltip="Let Buzz on another Mac triage this account's notifications "
+            tooltip="Let Propolis on another Mac triage this account's notifications "
             "through this one, so that Mac doesn't need to sign in to GitHub.",
             group=toga.Group.FILE,
             section=1,
@@ -626,7 +626,7 @@ class Buzz(toga.App):
         self.disconnect_cmd = toga.Command(
             self.on_disconnect_remote,
             "Disconnect from Other Mac",
-            tooltip="Stop triaging through Buzz on the other Mac. Nothing changes "
+            tooltip="Stop triaging through Propolis on the other Mac. Nothing changes "
             "there.",
             group=toga.Group.FILE,
             section=1,
@@ -673,7 +673,7 @@ class Buzz(toga.App):
             self.unsubscribe_cmd,
         )
         self.label_menu = macos.ToolbarMenu(
-            "buzz-label",
+            "propolis-label",
             "Label",
             "tag",
             self.label_menu_items,
@@ -681,7 +681,7 @@ class Buzz(toga.App):
             "With the list selected, number keys add them too.",
         )
         self.filter_menu = macos.ToolbarMenu(
-            "buzz-filter",
+            "propolis-filter",
             "Filter",
             FILTER_SYMBOLS[0],
             self.filter_menu_items,
@@ -868,7 +868,7 @@ class Buzz(toga.App):
         login = self.login()
         if self.remote is not None:
             self.account_label.text = textwrap.fill(
-                f"Triaging through Buzz at {self.remote.host}"
+                f"Triaging through Propolis at {self.remote.host}"
                 + (f", which is signed in to GitHub as {login}." if login else "."),
                 64,
             )
@@ -1343,7 +1343,7 @@ class Buzz(toga.App):
         label = self.current_label()
         where = f"the label “{label.name}”" if label else "the inbox"
         answers = await self.ask_form(
-            "Add to Buzz",
+            "Add to Propolis",
             [
                 (
                     "ref",
@@ -1412,9 +1412,9 @@ class Buzz(toga.App):
         """Change threads in the inbox being shown straight away, then on
         GitHub (or the other Mac).
 
-        GitHub's side is best effort: if it fails, the change in Buzz stands,
-        and the failure is logged. If the other Mac doesn't make a change,
-        though, the next look at its inbox puts it back, so say so.
+        GitHub's side is best effort: if it fails, the change in Propolis
+        stands, and the failure is logged. If the other Mac doesn't make a
+        change, though, the next look at its inbox puts it back, so say so.
         """
         client, store, remote_inbox = self.client, self.store, self.remote
         if not threads or client is None:
@@ -1919,7 +1919,7 @@ class Buzz(toga.App):
             children += [
                 toga.Label(
                     textwrap.fill(
-                        "Or triage through Buzz on another Mac that's signed in. "
+                        "Or triage through Propolis on another Mac that's signed in. "
                         "This Mac then doesn't need to sign in.",
                         56,
                     ),
@@ -2010,7 +2010,7 @@ class Buzz(toga.App):
         if await self.main_window.dialog(
             toga.ConfirmDialog(
                 "Sign Out of GitHub?",
-                "Buzz will forget this account's GitHub sign-in and stop checking "
+                "Propolis will forget this account's GitHub sign-in and stop checking "
                 "for notifications. Its labels are kept.",
             )
         ):
@@ -2171,7 +2171,8 @@ class Buzz(toga.App):
         return sync.poll_interval
 
     ######################################################################
-    # Sharing: letting Buzz on another Mac triage this account through this one
+    # Sharing: letting Propolis on another Mac triage this account through
+    # this one
     ######################################################################
 
     def share_code(self) -> str:
@@ -2182,8 +2183,8 @@ class Buzz(toga.App):
         return code
 
     def start_sharing(self) -> str | None:
-        """Let Buzz on another Mac triage this inbox through this one. Returns
-        why it can't, if it can't."""
+        """Let Propolis on another Mac triage this inbox through this one.
+        Returns why it can't, if it can't."""
         if self.server is not None:
             return None
         api = HostAPI(
@@ -2246,7 +2247,7 @@ class Buzz(toga.App):
         login = self.login()
         explanation = (
             (
-                f"Buzz on another Mac can triage {login}'s notifications through "
+                f"Propolis on another Mac can triage {login}'s notifications through "
                 "this one, so it doesn't need to sign in to GitHub. Everything it "
                 "does happens here, and your GitHub sign-in never leaves this Mac."
             ),
@@ -2303,15 +2304,15 @@ class Buzz(toga.App):
             self.wake.set()
 
     ######################################################################
-    # Triaging an account through Buzz on another Mac
+    # Triaging an account through Propolis on another Mac
     ######################################################################
 
     def on_show_connect(self, widget=None, **kwargs):
-        address = toga.TextInput(placeholder="https://buzz.example.com", flex=1)
+        address = toga.TextInput(placeholder="https://propolis.example.com", flex=1)
         code = toga.PasswordInput(placeholder="Code", flex=1)
         message = toga.Label(
             textwrap.fill(
-                "Buzz on the other Mac shows its code in File → Share This Inbox….",
+                "Propolis on the other Mac shows its code in File → Share This Inbox….",
                 64,
             ),
             font_size=11,
@@ -2370,7 +2371,8 @@ class Buzz(toga.App):
         address.focus()
 
     async def use_remote(self, client: RemoteClient, code: str):
-        """Triage the open account through Buzz on another Mac from now on."""
+        """Triage the open account through Propolis on another Mac from now
+        on."""
         try:
             self.save_secret(CONNECT_CODE, code)
         except credentials.KeyringError as exc:
@@ -2490,4 +2492,4 @@ class Buzz(toga.App):
 
 
 def main():
-    return Buzz()
+    return Propolis()

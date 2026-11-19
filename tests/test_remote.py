@@ -3,8 +3,8 @@ from dataclasses import replace
 
 import pytest
 
-from buzz.remote import HostAPI, NotPaired, RemoteClient, RemoteError, RemoteServer
-from buzz.store import INBOX, Mirror, Store, Thread
+from propolis.remote import HostAPI, NotPaired, RemoteClient, RemoteError, RemoteServer
+from propolis.store import INBOX, Mirror, Store, Thread
 
 
 def thread(id):
@@ -43,7 +43,7 @@ class FakeGitHub:
 
 @pytest.fixture(autouse=True)
 def no_slow_refusals(monkeypatch):
-    monkeypatch.setattr("buzz.remote.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("propolis.remote.time.sleep", lambda seconds: None)
 
 
 async def serve(host: Store, github, code="s3cret"):
