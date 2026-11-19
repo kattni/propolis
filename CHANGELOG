@@ -1,0 +1,7 @@
+# Buzz Release Notes
+
+## 0.1.0 (18 Nov 2026)
+
+* Initial release: a GitHub notifications inbox with Inbox, Unread and Done
+  views, local labels, and Open, Mark as Read, Mark as Done and Unsubscribe
+  actions.

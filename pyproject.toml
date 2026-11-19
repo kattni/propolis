@@ -1,0 +1,38 @@
+# This project was generated with 0.4.7 using template: https://github.com/beeware/briefcase-template @ v0.4.7
+[tool.briefcase]
+project_name = "Buzz"
+bundle = "com.example"
+version = "0.1.0"
+url = "https://example.com/buzz"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+author = "Your Name"
+author_email = "you@example.com"
+
+[tool.briefcase.app.buzz]
+formal_name = "Buzz"
+description = "A GitHub notifications inbox with labels"
+long_description = """Buzz keeps an inbox of your GitHub notifications, like the one on
+github.com, and lets you organise threads with your own labels.
+"""
+sources = [
+    "src/buzz",
+]
+test_sources = [
+    "tests",
+]
+
+requires = [
+    "httpx~=0.28",
+    "keyring~=25.0",
+]
+test_requires = [
+    "pytest",
+]
+
+[tool.briefcase.app.buzz.macOS]
+universal_build = true
+requires = [
+    "toga-cocoa~=0.5.7",
+    "std-nslog~=2.0.0",
+]
