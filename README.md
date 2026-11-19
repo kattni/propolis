@@ -138,6 +138,8 @@ you. A failing CI run on one of your pull requests does count.
   account, such as one whose inbox you're looking after, with its own labels
   and history. Switch between them with **File → Switch Account**. Each
   account remembers its GitHub login, and refuses a sign-in as anyone else.
+  An account can also be on another Mac, triaged through Buzz there (see
+  [Sharing an inbox with another Mac](#sharing-an-inbox-with-another-mac)).
 
 ### Keyboard shortcuts
 
@@ -184,81 +186,69 @@ your private repositories. So it can't see who was active on threads in
 icons stay grey. Their notifications still appear, and marking them as read
 or done works.
 
-## Remote control
+## Sharing an inbox with another Mac
 
-You can use your own Buzz to read and triage the inbox of someone else's Buzz,
-on their Mac, signed in as them, without ever having their GitHub token. Their
-Buzz makes every GitHub request itself; yours only sends it instructions,
-through a Cloudflare named tunnel.
+A Mac that's signed in to GitHub can share an account's inbox, so that Buzz on
+another Mac triages it through that one, without signing in to GitHub. Everything
+you do on the other Mac happens on the sharing Mac, which keeps the only copy of
+the labels and history, and makes every GitHub request itself. So the sharing
+Mac has to be running Buzz for the other one to work. This is also how to take
+over someone else's inbox: they share it, and you connect to it.
 
-**What you can do** in their inbox: everything you can do in your own, from
+**What the other Mac can do:** everything you can do on the sharing Mac, from
 labelling and marking as done to adding, renaming and deleting labels. Changes
-are made as them on GitHub. **What you can't do:** see their GitHub token,
-change their settings, or turn remote control off or on.
-
-**How it's protected:**
-
-- Remote control is off until they switch it on, in their Buzz's settings.
-  While it's on, their window's title says "📡 Remote control on", and their
-  status line shows the last change you made.
-- Their Buzz only listens on `127.0.0.1` (port 47321), so the only way in is
-  through the tunnel.
-- Every request needs an access key that their Buzz makes. They can make a new
-  one at any time, and the old one stops working straight away.
-- You should also put Cloudflare Access in front of the tunnel, with a service
-  token, so requests without it never reach their Mac.
+are made on GitHub as the sharing Mac's account. **What it can't do:** see the
+GitHub sign-in, change settings, or stop sharing.
 
 ### Setting it up
 
-**You, in the Cloudflare dashboard** (you need a domain on Cloudflare):
+Buzz reaches the sharing Mac through a tunnel you run, such as a
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/),
+so it works from anywhere. On the sharing Mac:
 
-1. Go to **Networking → Tunnels → Create a tunnel**, and name it (for example
-   `buzz-alice`). When it shows the command to install a connector, copy the
-   long token at the end of the command. Don't run the command: their Buzz
-   runs the tunnel itself.
-2. On the tunnel's **Routes** tab, choose **Add route → Published
-   application**. Pick a subdomain and domain (for example
-   `buzz-alice.example.com`), and set the **Service URL** to
-   `http://localhost:47321`.
-3. Create a service token in **Zero Trust → Access controls → Service
-   credentials → Service Tokens**, and keep its client ID and secret (the
-   secret is only shown once).
-4. Add a self-hosted Access application for that hostname, with a policy whose
-   action is **Service Auth** and which includes the service token.
-5. Send them the tunnel token, privately.
+1. Install `cloudflared`, for example with `brew install cloudflared`.
+2. Make a tunnel with a public hostname, such as `buzz.example.com`, whose
+   service is `http://localhost:47615`. This needs a Cloudflare account and a
+   domain on Cloudflare. You can make the tunnel in Cloudflare's dashboard, or
+   with `cloudflared tunnel create` and a config file. Run it as a service, so
+   it's there whenever the Mac is.
 
-**Them, on their Mac:**
+   To try sharing without a Cloudflare account, run
+   `cloudflared tunnel --url http://localhost:47615` instead. It prints a
+   `trycloudflare.com` address, which changes every time.
+3. In Buzz, choose **File → Share This Inbox…**, and turn on **Share this
+   inbox**. The window shows a code. While sharing is on, the window's title
+   says "📡 Remote control on", and the status line shows the last change the
+   other Mac made.
 
-1. Install cloudflared: `brew install cloudflared`.
-2. In Buzz, open **Settings** (⌘,). Under **Remote Control**, paste the tunnel
-   token and choose **Save**, then tick **Allow remote control of this inbox**.
-   The status underneath should say "Tunnel connected."
-3. Choose **Copy** next to the access key, and send it to you, privately.
+On the other Mac, open Buzz, or choose **File → Add Account…** if it already
+has an account. Click **Connect to Another Mac…**, and enter the tunnel's
+address and the code. The shared inbox becomes one of that Mac's accounts:
+switch between it and the others with **File → Switch Account**. While it's
+open, the window title says which Mac it's on. Only an account that hasn't
+signed in to GitHub yet can connect, since an account's history is one
+account's.
 
-**You, in your Buzz:**
-
-1. Choose **File → Add Remote Inbox…**, and enter their name, the address
-   (`https://buzz-alice.example.com`), the access key, and the service token's
-   client ID and secret. Buzz checks that it can connect before saving.
-2. Switch between your inbox and theirs with the menu at the top of the
-   sidebar. While you're in theirs, the window title says so.
-
-To stop, they untick **Allow remote control** (which closes the tunnel
-straight away), or choose **New Key**. You can also revoke the service token
-or delete the tunnel in Cloudflare. **File → Remove Remote Inbox…** makes your
-Buzz forget theirs, without changing anything in their inbox.
+To stop, choose **File → Disconnect from Other Mac** on the Mac that's
+connected, or turn sharing off on the sharing Mac. To turn away every Mac that
+has the code, click **New Code** in the Share This Inbox window.
 
 ### Things to know
 
-- Their Mac needs to be awake, with Buzz open, for you to reach it. Remote
-  control comes back on by itself when they open Buzz again.
-- Your Buzz checks their inbox every 10 seconds, and straight after each change
-  you make.
+- The sharing Mac needs to be awake, with Buzz open and signed in, for the
+  other one to reach it. Sharing comes back on by itself when Buzz opens again.
+- Buzz only listens on `127.0.0.1`, so the only way in from elsewhere is
+  through the tunnel. Every request needs the code.
+- A Mac with the code can see the notifications' titles and links, and the
+  labels and history, and can triage them, so only give it to someone you'd
+  let do that. Cloudflare carries the traffic, and can read it as it passes
+  through.
+- The other Mac checks the shared inbox every 10 seconds, and straight after
+  each change it makes. Problems reaching it show in the status line.
 - A notification's page shows GitHub signed in as *you*, in Buzz, and **Open
   on GitHub** opens it in your browser, signed in as you. Either one marks the
-  notification as read in *their* inbox.
-- Access sign-in through a browser isn't supported; use a service token.
-- The local port, 47321, is fixed; the tunnel's route must point to it.
+  notification as read in the shared inbox.
+- The port, 47615, is fixed; the tunnel must point to it.
 
 ## Running it
 
@@ -299,22 +289,35 @@ makes a DMG you can install from.
 
 | File | What it does |
 | ---- | ------------ |
-| `src/buzz/app.py` | The Toga app: window layout, commands and menus, signing in, accounts, and switching between your inbox and remote ones |
+| `src/buzz/app.py` | The Toga app: window layout, commands and menus, signing in, accounts, sharing an inbox and connecting to one on another Mac |
 | `src/buzz/sync.py` | Bringing GitHub into the store: new threads, activity on known ones, failing CI on your pull requests, threads added by hand, and finding discussions' numbers |
 | `src/buzz/activity.py` | Whether a bit of activity needs a response from you |
-| `src/buzz/actions.py` | Changing threads in the store, and on GitHub or the other Buzz, best effort |
-| `src/buzz/remote.py` | Remote control: the local API another Buzz talks to, running cloudflared, and the client for controlling another Buzz |
+| `src/buzz/actions.py` | Changing threads in the store, and on GitHub or the other Mac, best effort |
+| `src/buzz/remote.py` | Sharing an inbox: the local API Buzz on another Mac talks to, one endpoint per action, and the client for triaging through another Mac |
 | `src/buzz/github.py` | A small async client for GitHub's API (using httpx): notifications, timelines and pushes, failing checks, finding discussions, looking up whether issues and pull requests are open (with the GraphQL API), and turning API URLs into github.com links |
 | `src/buzz/auth.py` | Signing in to GitHub with OAuth device flow |
-| `src/buzz/accounts.py` | The GitHub accounts Buzz triages, each with its own store |
-| `src/buzz/store.py` | SQLite storage for threads, labels, which threads have which labels, when there was activity and when you saw it, and attention flags |
+| `src/buzz/accounts.py` | The GitHub accounts Buzz triages, each with its own store, or on another Mac |
+| `src/buzz/store.py` | An inbox's views and triage, kept in SQLite as an event log beside what GitHub says about each thread, or copied from another Mac |
+| `src/buzz/events.py` | The events that make up the triage history, each named with the device it was made on |
+| `src/buzz/state.py` | The triage state, made by replaying the events in order, and the default labels |
+| `src/buzz/legacy.py` | Turning stores from before the event log into events, once |
 | `src/buzz/resources/octicons/` | Icons from GitHub's [Octicons](https://primer.style/octicons/) 19.42.0, under the MIT licence (in `LICENSE` there), drawn as 32×32 PNGs |
-| `src/buzz/credentials.py` | Saving the GitHub sign-in and remote control keys in the Keychain (using keyring) |
+| `src/buzz/credentials.py` | Saving the GitHub sign-in and sharing codes in the Keychain (using keyring) |
 | `src/buzz/macos.py` | AppKit touches Toga doesn't offer yet: selecting a table row, column widths, copying to the clipboard, labels drawn as pills, the toolbar's Label and Filter menus, number keys, Delete and ⌘↑/⌘↓ in lists, icons' VoiceOver descriptions, turning off window tabs, the address bar's Back and Forward, and sending links to other sites to your browser |
 
 Your data lives in `~/Library/Application Support/com.example.buzz/Data/`:
 the first account's store is `buzz.sqlite3`, other accounts' are in
-`accounts/`, and `accounts.json` lists them.
+`accounts/`, and `accounts.json` lists them. An account on another Mac keeps
+nothing here but that Mac's address, in `accounts.json`, and its code, in the
+Keychain.
+
+Each store records every triage change as an event, named with the device it
+was made on, and rebuilds the triage state by replaying them, as Propolis
+does. That's the groundwork for syncing between devices. What GitHub says
+about each thread is kept beside the events, as a cache. A store from before
+the event log becomes one the first time this version opens it. Older
+versions of Buzz don't understand the new format, so don't go back to one
+after that.
 
 ## Limitations
 
@@ -334,8 +337,10 @@ the first account's store is `buzz.sqlite3`, other accounts' are in
   any activity on them counts, including your own.
 - Threads you've added by number are checked one request each, every 10
   minutes; done ones aren't checked any more.
-- Times are compared with your Mac's clock, so a thread viewed while your
-  clock is behind GitHub's can keep its ●.
+- What you do in Buzz is ordered after the latest activity it knows of, so
+  it doesn't matter if your Mac's clock is a little behind GitHub's. If it's
+  more than an hour behind, though, a thread you view can keep its ●, and one
+  you take out of Attention required can stay there.
 - The bundle ID is the placeholder `com.example` and the app uses Briefcase's
   default icon. Change `bundle` in `pyproject.toml` (and add an `icon`) before
   you share a build. Changing the bundle ID also moves where the app keeps its

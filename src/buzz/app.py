@@ -5,9 +5,7 @@ A GitHub notifications inbox with labels.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
-import secrets
 import textwrap
 import time
 import traceback
@@ -37,16 +35,15 @@ from .github import (
 )
 from .macos import SEPARATOR, MenuItem, Pill
 from .remote import (
-    REMOTE_PORT,
+    PORT,
     HostAPI,
+    NotPaired,
     RemoteClient,
     RemoteError,
     RemoteServer,
-    Tunnel,
-    check_address,
-    stop_stale_cloudflared,
+    new_code,
 )
-from .store import ATTENTION, DONE, INBOX, UNREAD, Label, Store, Thread
+from .store import ATTENTION, DONE, INBOX, UNREAD, Inbox, Label, Mirror, Store, Thread
 from .sync import Sync, WrongSignIn
 
 ATTENTION_NAME = "⚠️ Attention required"
@@ -136,13 +133,14 @@ STATUS_WIDTH = 40
 ADDED_CHECK_EVERY = 10 * 60
 #: Don't open more browser tabs than this at once.
 OPEN_LIMIT = 10
-#: How often (seconds) to check a remote inbox for changes.
+#: How often (seconds) to check an inbox on another Mac for changes.
 REMOTE_POLL_INTERVAL = 10
-MY_INBOX = "My inbox"
 
-# Keychain entries, besides the GitHub token.
-TUNNEL_TOKEN = "cloudflare-tunnel-token"
-ACCESS_KEY = "remote-access-key"
+# Keychain entries, besides the GitHub token: the code another Mac needs to
+# triage this account through this one, and the code for triaging an account
+# through another Mac.
+SHARE_CODE = "share-code"
+CONNECT_CODE = "connect-code"
 
 _KEY_SYMBOLS = {
     "mod 3": "⌃",
@@ -158,23 +156,21 @@ _MODIFIER_ORDER = ["mod 3", "mod 2", "shift", "mod 1"]
 
 @dataclass(eq=False)
 class RemoteInbox:
-    """Another Buzz's inbox, being shown and controlled from this one."""
+    """An account's inbox on another Mac, triaged through Buzz there."""
 
-    name: str
     client: RemoteClient
-    #: A copy of their inbox, refreshed from theirs.
-    store: Store = field(default_factory=lambda: Store(":memory:"))
+    #: A copy of the inbox, refreshed from the other Mac's.
+    mirror: Mirror = field(default_factory=Mirror)
     etag: str | None = None
-    #: Changes sent to their Buzz but not finished yet. While there are any,
-    #: refreshes are skipped, so they don't undo changes on their way.
+    #: Changes sent to the other Mac but not finished yet. While there are
+    #: any, refreshes are skipped, so they don't undo changes on their way.
     pending: int = 0
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task | None = None
 
-
-def remote_secret_names(url: str) -> tuple[str, str]:
-    """The Keychain entries for a remote inbox's access key and Access secret."""
-    return f"remote:{url}:key", f"remote:{url}:access-secret"
+    @property
+    def host(self) -> str:
+        return self.client.host
 
 
 def local_time(timestamp: str) -> str:
@@ -230,17 +226,6 @@ def sync_rows(source: ListSource, items: list[dict], key: str = "key") -> None:
             source.insert(index, item)
 
 
-def set_shown(parent: toga.Widget, widget: toga.Widget, shown: bool, index: int):
-    """Put ``widget`` into ``parent`` at ``index``, or take it out.
-
-    (Toga doesn't hide widgets with display=NONE yet.)
-    """
-    if shown and widget not in parent.children:
-        parent.insert(index, widget)
-    elif not shown and widget in parent.children:
-        parent.remove(widget)
-
-
 def type_icon(thread: Thread) -> str:
     """The Octicon for a thread: the one for its state, if that's known."""
     return STATE_ICONS.get((thread.type, thread.state)) or TYPE_ICONS.get(
@@ -275,9 +260,7 @@ class Buzz(toga.App):
         return Accounts(self.paths.data)
 
     def open_store(self, account: str) -> Store:
-        store = Store(self.accounts.path(account))
-        store.add_default_labels()
-        return store
+        return Store(self.accounts.path(account))
 
     # Secrets belong to the open account.
 
@@ -313,11 +296,11 @@ class Buzz(toga.App):
     async def sign_in(self, show_code: Callable[[auth.DeviceCode], None]) -> str:
         return await auth.sign_in(show_code)
 
-    def make_remote_client(self, url: str, key: str, access_id, access_secret):
-        return RemoteClient(url, key, access_id, access_secret)
+    def make_remote_client(self, url: str, code: str) -> RemoteClient:
+        return RemoteClient(url, code)
 
-    def make_tunnel(self, token: str) -> Tunnel:
-        return Tunnel(token, self.loop, self.on_tunnel_status)
+    def share_port(self) -> int:
+        return PORT
 
     ######################################################################
     # Startup
@@ -326,22 +309,23 @@ class Buzz(toga.App):
     def startup(self):
         macos.disable_window_tabs()
         self.accounts = self.open_accounts()
-        # The open account's own inbox. Hosting always uses this, whichever
-        # inbox the window is showing.
-        self.local_store = self.open_store(self.accounts.current)
+        # The open account's inbox, if it's on this Mac.
+        self.local_store: Store | None = None
+        if self.accounts.current not in self.accounts.remotes:
+            self.local_store = self.open_store(self.accounts.current)
         self.github: GitHubClient | None = None
         self.sync: Sync | None = None
-        # The other Buzz being shown, if any.
+        # The open account's inbox, if it's on another Mac.
         self.remote: RemoteInbox | None = None
-        self.local_status = ""
-        # Letting another Buzz control this one.
+        # Shown while there's no inbox yet.
+        self.nothing = Mirror()
+        self.status_text = ""
+        # Letting Buzz on another Mac triage this account through this one.
         self.server: RemoteServer | None = None
-        self.tunnel: Tunnel | None = None
-        self.tunnel_status = ""
+        self.share_window: toga.Window | None = None
         self.last_remote_change = ""
-        self.picking_inbox = False
 
-        self.view: str | int = INBOX
+        self.view: str = INBOX
         self.labels: list[Label] = []
         self.sync_task: asyncio.Task | None = None
         self.sign_in_task: asyncio.Task | None = None
@@ -392,9 +376,8 @@ class Buzz(toga.App):
         self.token = self.load_token()
         self.name_account()
         self.update_title()
-        self.update_inbox_picker()
         self.reload()
-        if self.token or self.remote_configs():
+        if self.token or self.local_store is None:
             self.show_inbox()
         else:
             self.main_window.content = toga.Box()  # Until signing in starts.
@@ -407,10 +390,12 @@ class Buzz(toga.App):
         await self.open_account()
 
     async def on_exit(self):
-        self.stop_hosting(forget=False)
+        self.stop_sharing()
         await self.finish_tasks()
         if self.github is not None:
             await self.github.aclose()
+        if self.remote is not None:
+            await self.remote.client.aclose()
         return True
 
     async def finish_tasks(self):
@@ -425,29 +410,53 @@ class Buzz(toga.App):
             await asyncio.wait(others, timeout=5)
 
     async def open_account(self):
-        """Show the open account's inbox, and keep it up to date with GitHub,
-        if it's signed in. If it isn't, show someone else's inbox that it
-        controls, or ask it to sign in."""
-        if self.token:
-            self.connect(self.token)
-            self.show_inbox()
-        elif configs := self.remote_configs():
-            await self.switch_inbox(configs[0]["name"])
+        """Connect to the other Mac if the open account is there. Otherwise,
+        show its inbox and keep it up to date with GitHub, if it's signed in,
+        or ask it to sign in."""
+        account = self.accounts.current
+        if (url := self.accounts.remotes.get(account)) is not None:
+            code = self.load_secret(CONNECT_CODE)
+            try:
+                client = self.make_remote_client(url, code) if code else None
+            except ValueError:
+                client = None
+            if client is None:
+                await self.disconnect_remote(f"Connect to Buzz at {url} again.")
+            else:
+                self.start_remote(client)
+        elif self.token:
+            self.start_syncing(self.token)
         else:
             self.show_sign_in()
-        if self.local_store.get_meta("hosting") == "on":
-            self.start_hosting()
+
+    def start_syncing(self, token: str):
+        """Show the inbox, keep it up to date with GitHub, and share it with
+        another Mac if you've chosen to."""
+        self.connect(token)
+        self.show_inbox()
+        if self.local_store.get_meta("share") and (error := self.start_sharing()):
+            self.report(f"⚠️ {error}")
 
     @property
-    def store(self) -> Store:
-        """The store of the inbox being shown."""
-        return self.remote.store if self.remote else self.local_store
+    def store(self) -> Inbox:
+        """The inbox being shown."""
+        if self.remote is not None:
+            return self.remote.mirror
+        return self.local_store if self.local_store is not None else self.nothing
 
     @property
     def client(self):
-        """What changes the inbox being shown: GitHub for ours, or the other
-        Buzz for a remote one. None if not connected."""
+        """What changes the inbox being shown: GitHub, or Buzz on the other Mac
+        for an account that's there. None if not connected."""
         return self.remote.client if self.remote else self.github
+
+    def login(self) -> str | None:
+        """The open account's GitHub login, once that's known."""
+        if self.remote is not None:
+            return self.remote.mirror.login
+        if self.local_store is None:
+            return None
+        return self.local_store.get_meta("login")
 
     def create_commands(self):
         mod, shift = toga.Key.MOD_1, toga.Key.SHIFT
@@ -599,23 +608,28 @@ class Buzz(toga.App):
             self.on_add_account,
             "Add Account…",
             tooltip="Triage another GitHub account's notifications, with labels "
-            "of its own.",
+            "of its own. Sign it in to GitHub, or connect to Buzz on a Mac that's "
+            "signed in to it.",
             group=toga.Group.FILE,
             section=2,
         )
-        self.add_remote_cmd = toga.Command(
-            self.on_add_remote,
-            "Add Remote Inbox…",
-            tooltip="Control the inbox of Buzz on someone else's Mac",
+        self.share_cmd = toga.Command(
+            self.on_show_share,
+            "Share This Inbox…",
+            tooltip="Let Buzz on another Mac triage this account's notifications "
+            "through this one, so that Mac doesn't need to sign in to GitHub.",
             group=toga.Group.FILE,
-            section=5,
+            section=1,
             order=1,
+            enabled=False,
         )
-        self.remove_remote_cmd = toga.Command(
-            self.on_remove_remote,
-            "Remove Remote Inbox…",
+        self.disconnect_cmd = toga.Command(
+            self.on_disconnect_remote,
+            "Disconnect from Other Mac",
+            tooltip="Stop triaging through Buzz on the other Mac. Nothing changes "
+            "there.",
             group=toga.Group.FILE,
-            section=5,
+            section=1,
             order=2,
             enabled=False,
         )
@@ -642,8 +656,8 @@ class Buzz(toga.App):
             self.delete_label_cmd,
             self.sign_out_cmd,
             self.add_account_cmd,
-            self.add_remote_cmd,
-            self.remove_remote_cmd,
+            self.share_cmd,
+            self.disconnect_cmd,
             self.shortcuts_cmd,
         )
         if settings := toga.Command.standard(self, toga.Command.PREFERENCES):
@@ -695,16 +709,10 @@ class Buzz(toga.App):
         self.label_input = toga.TextInput(
             placeholder="New label", on_confirm=self.on_add_label, flex=1
         )
-        # Which inbox to show: ours, or one we control on another Mac.
-        self.inbox_picker = toga.Selection(on_change=self.on_pick_inbox, flex=1)
-        self.inbox_picker_row = toga.Box(
-            direction=ROW, margin=(8, 8, 4, 8), children=[self.inbox_picker]
-        )
         self.status = toga.Label("", font_size=11, margin=(0, 10, 8, 10))
         self.sidebar_column = toga.Box(
             direction=COLUMN,
             children=[
-                self.inbox_picker_row,
                 self.sidebar,
                 toga.Box(
                     direction=ROW,
@@ -820,6 +828,9 @@ class Buzz(toga.App):
         self.settings_sign_out_button = toga.Button(
             "Sign Out", on_press=self.on_sign_out
         )
+        self.settings_disconnect_button = toga.Button(
+            "Disconnect", on_press=self.on_disconnect_remote
+        )
         form = toga.Box(
             direction=COLUMN,
             gap=12,
@@ -828,8 +839,6 @@ class Buzz(toga.App):
                 toga.Label("GitHub", font_size=20, font_weight=BOLD),
                 self.account_label,
                 self.account_buttons,
-                toga.Divider(margin=(8, 0)),
-                *self.build_hosting_settings(),
                 toga.Box(
                     direction=ROW,
                     margin_top=8,
@@ -850,55 +859,21 @@ class Buzz(toga.App):
             ),
         )
 
-    def build_hosting_settings(self) -> list[toga.Widget]:
-        """The settings for letting someone else control this inbox."""
-        self.hosting_switch = toga.Switch(
-            "Allow remote control of this inbox", on_change=self.on_toggle_hosting
-        )
-        self.tunnel_token_input = toga.PasswordInput(
-            placeholder="Paste the tunnel token you were given", flex=1
-        )
-        self.access_key_display = toga.TextInput(readonly=True, flex=1)
-        self.hosting_status = toga.Label("")
-        return [
-            toga.Label("Remote Control", font_size=16, font_weight=BOLD),
-            toga.Label(
-                "Lets someone you trust use their copy of Buzz to read and triage\n"
-                "this inbox, through a Cloudflare tunnel they set up for you. Their\n"
-                "changes are made as you; your GitHub sign-in never leaves this Mac.\n"
-                "They can't change your settings or turn this off."
-            ),
-            self.hosting_switch,
-            toga.Label("Cloudflare tunnel token"),
-            toga.Box(
-                direction=ROW,
-                gap=8,
-                children=[
-                    self.tunnel_token_input,
-                    toga.Button("Save", on_press=self.on_save_tunnel_token),
-                ],
-            ),
-            toga.Label("Access key (send this to them privately)"),
-            toga.Box(
-                direction=ROW,
-                gap=8,
-                children=[
-                    self.access_key_display,
-                    toga.Button("Copy", on_press=self.on_copy_access_key),
-                    toga.Button("New Key", on_press=self.on_new_access_key),
-                ],
-            ),
-            self.hosting_status,
-        ]
-
     def show_inbox(self):
         self.cancel_sign_in()
         self.main_window.content = self.inbox_view
 
     def show_settings(self):
         self.cancel_sign_in()
-        login = self.local_store.get_meta("login")
-        if self.token:
+        login = self.login()
+        if self.remote is not None:
+            self.account_label.text = textwrap.fill(
+                f"Triaging through Buzz at {self.remote.host}"
+                + (f", which is signed in to GitHub as {login}." if login else "."),
+                64,
+            )
+            button = self.settings_disconnect_button
+        elif self.token:
             self.account_label.text = (
                 f"Signed in to GitHub as {login}." if login else "Signed in to GitHub."
             )
@@ -908,15 +883,13 @@ class Buzz(toga.App):
             button = self.sign_in_button
         self.account_buttons.clear()
         self.account_buttons.add(button)
-        self.update_hosting_settings()
         self.main_window.content = self.settings_view
 
     def update_title(self):
+        login = self.login()
         if self.remote is not None:
-            login = self.remote.store.get_meta("login")
-            whose = f"{self.remote.name}'s inbox" + (f" ({login})" if login else "")
-            title = f"{self.formal_name} — {whose}, remotely"
-        elif login := self.local_store.get_meta("login"):
+            title = f"{self.formal_name} — {login or 'New account'}, through {self.remote.host}"
+        elif login:
             title = f"{self.formal_name} — {login}"
         elif len(self.accounts.names) > 1:
             title = f"{self.formal_name} — New account"
@@ -927,16 +900,17 @@ class Buzz(toga.App):
         self.main_window.title = title
 
     def report(self, text: str, remote: RemoteInbox | None = None):
-        """Show a status message from our inbox (``remote=None``) or a remote
-        one, if that's the inbox being shown."""
-        if remote is None:
-            self.local_status = text
-            # While someone else can control this inbox, keep saying what
-            # they last did, whatever else happens.
-            if self.server is not None and self.last_remote_change:
-                text += f"   📡 Remotely {self.last_remote_change}."
-        if remote is self.remote:
-            self.set_status(text)
+        """Show a status message about the open account's inbox. ``remote`` is
+        the inbox on another Mac it's about, if it's about one: if that isn't
+        open any more, there's nothing to say."""
+        if remote is not None and remote is not self.remote:
+            return
+        self.status_text = text
+        # While another Mac can triage this inbox, keep saying what it last
+        # did, whatever else happens.
+        if self.server is not None and self.last_remote_change:
+            text += f"   📡 Remotely {self.last_remote_change}."
+        self.set_status(text)
 
     def set_status(self, text: str):
         """Show text in the status line, at the bottom of the sidebar."""
@@ -1166,19 +1140,20 @@ class Buzz(toga.App):
         self.read_cmd.enabled = connected and bool(to_view(threads))
         self.done_cmd.enabled = connected and any(not t.done for t in threads)
         self.unsubscribe_cmd.enabled = connected and bool(threads)
-        self.remove_cmd.enabled = bool(threads) and (
-            isinstance(self.view, int) or self.view == ATTENTION
-        )
+        labelled = self.current_label() is not None
+        self.remove_cmd.enabled = bool(threads) and (labelled or self.view == ATTENTION)
         for command in (
             self.edit_label_cmd,
             self.move_up_cmd,
             self.move_down_cmd,
             self.delete_label_cmd,
         ):
-            command.enabled = isinstance(self.view, int)
+            command.enabled = labelled
         for command in self.label_commands:
             command.enabled = bool(threads)
         self.sign_out_cmd.enabled = bool(self.token)
+        self.share_cmd.enabled = self.github is not None
+        self.disconnect_cmd.enabled = self.remote is not None
         self.label_menu.update(enabled=bool(threads))
 
         if len(threads) == 1:
@@ -1211,13 +1186,13 @@ class Buzz(toga.App):
         self.web_view.url = self.address.value = html_url(thread)
         self.loop.create_task(self.view_threads([thread]))
 
-    def sidebar_index(self, key: str | int) -> int | None:
+    def sidebar_index(self, key: str) -> int | None:
         for index, row in enumerate(self.sidebar.data):
             if row.key == key:
                 return index
         return None
 
-    def select_view(self, key: str | int):
+    def select_view(self, key: str):
         self.view = key
         self.table.data = self.thread_rows()
         self.reload()
@@ -1280,7 +1255,7 @@ class Buzz(toga.App):
 
     def on_refresh(self, command=None, **kwargs):
         if self.remote is not None:
-            # Ask their Buzz to check GitHub; we'll see the result shortly.
+            # Ask the other Mac to check GitHub; the result shows shortly.
             self.send_remote("refresh")
         elif self.github is not None:
             self.check_added_now = True
@@ -1329,19 +1304,17 @@ class Buzz(toga.App):
     def on_remove_from_view(self, command=None, **kwargs):
         """Take the view's label off the selected notifications: the label's,
         or Attention required."""
-        if isinstance(self.view, int):
-            label_id = self.view
+        if (label := self.current_label()) is not None:
             self.change_selected(
-                lambda ids: self.store.set_label(label_id, ids, False),
-                "set_label",
-                label_id=label_id,
-                on=False,
+                lambda ids: self.store.set_label(label.id, ids, False),
+                "unlabel",
+                label=label.id,
             )
         elif self.view == ATTENTION:
             self.change_selected(
                 lambda ids: self.store.set_attention(ids, False),
-                "set_attention",
-                on=False,
+                "unlabel",
+                label=ATTENTION,
             )
 
     def on_delete_key(self) -> bool:
@@ -1349,7 +1322,7 @@ class Buzz(toga.App):
         The inbox has no label to take off, so there it means Mark as Done."""
         if not self.selected_threads():
             return False
-        if isinstance(self.view, int) or self.view == ATTENTION:
+        if self.current_label() is not None or self.view == ATTENTION:
             self.on_remove_from_view()
         elif self.view in (INBOX, UNREAD) and self.client is not None:
             self.loop.create_task(self.on_mark_done())
@@ -1391,9 +1364,9 @@ class Buzz(toga.App):
         try:
             if remote is not None:
                 result = await remote.client.action(
-                    "add_thread", ref=text, label_id=label_id
+                    "add", reference=text, label=label_id
                 )
-                thread_id = result["thread_id"]
+                thread_id = result["thread"]
                 remote.etag = None
                 await self.remote_sync_once(remote)
             else:
@@ -1437,11 +1410,11 @@ class Buzz(toga.App):
         select_next: bool = False,
     ):
         """Change threads in the inbox being shown straight away, then on
-        GitHub (or the other Buzz).
+        GitHub (or the other Mac).
 
         GitHub's side is best effort: if it fails, the change in Buzz stands,
-        and the failure is logged. If the other Buzz doesn't make a change,
-        though, the next look at their inbox puts it back, so say so.
+        and the failure is logged. If the other Mac doesn't make a change,
+        though, the next look at its inbox puts it back, so say so.
         """
         client, store, remote_inbox = self.client, self.store, self.remote
         if not threads or client is None:
@@ -1466,7 +1439,7 @@ class Buzz(toga.App):
         if failures and remote_inbox is not None:
             await self.main_window.dialog(
                 toga.ErrorDialog(
-                    "Couldn't update their Buzz",
+                    "Couldn't change the other Mac's inbox",
                     f"{len(failures)} of {len(threads)} notifications weren't "
                     f"changed.\n\n{failures[0][1]}",
                 )
@@ -1484,8 +1457,10 @@ class Buzz(toga.App):
         remote = self.remote
         try:
             if remote is not None:
-                # Their Buzz decides the new label's ID, so wait for it.
-                await remote.client.action("create_label", name=name, flag=flag)
+                # The other Mac decides the new label's ID, so wait for it.
+                await remote.client.action(
+                    "define-label", name=name, flag_on_activity=flag
+                )
             else:
                 self.store.create_label(name, flag=flag)
         except (ValueError, RemoteError) as exc:
@@ -1522,7 +1497,9 @@ class Buzz(toga.App):
                 toga.ErrorDialog("Couldn't change the label", str(exc))
             )
             return
-        self.send_remote("edit_label", label_id=label.id, name=name, flag=flag)
+        self.send_remote(
+            "define-label", label=label.id, name=name, flag_on_activity=flag
+        )
         self.reload()
 
     async def on_delete_label(self, command=None, **kwargs):
@@ -1540,7 +1517,7 @@ class Buzz(toga.App):
             )
         ):
             self.store.delete_label(label.id)
-            self.send_remote("delete_label", label_id=label.id)
+            self.send_remote("delete-label", label=label.id)
             self.select_view(INBOX)
 
     def on_move_key(self, offset: int) -> bool:
@@ -1567,7 +1544,7 @@ class Buzz(toga.App):
             return
         order.insert(index + offset, order.pop(index))
         self.store.reorder_labels(order)
-        self.send_remote("reorder_labels", order=order)
+        self.send_remote("reorder-labels", order=order)
         self.reload()
         if (row := self.sidebar_index(label.id)) is not None:
             macos.select_row(self.sidebar, row)
@@ -1579,13 +1556,13 @@ class Buzz(toga.App):
         self.apply_label(self.labels[index].id)
         return True
 
-    def label_command_action(self, label_id: int):
+    def label_command_action(self, label_id: str):
         def apply(command, **kwargs):
             self.apply_label(label_id)
 
         return apply
 
-    def apply_label(self, label_id: int):
+    def apply_label(self, label_id: str):
         """Give the selected notifications a label, which marks them as read.
         One that already has it keeps its place in it. If they've left the
         list, the next notification is selected."""
@@ -1599,17 +1576,17 @@ class Buzz(toga.App):
             self.move_selection_on(index, before)
 
         if self.remote is not None:
-            # Their Buzz marks them as read on GitHub, and subscribes.
+            # The other Mac marks them as read on GitHub, and subscribes.
             ids = [thread.id for thread in threads]
             self.store.set_label(label_id, ids, True)
-            self.send_remote("set_label", thread_ids=ids, label_id=label_id, on=True)
+            self.send_remote("label", threads=ids, label=label_id)
             after_local()
         else:
             self.loop.create_task(
                 label_threads(self.store, self.github, label, threads, after_local)
             )
 
-    def toggle_label(self, label_id: int):
+    def toggle_label(self, label_id: str):
         """Add a label to the selected notifications, or take it off if they
         all have it."""
         assigned = self.store.labels_by_thread()
@@ -1621,22 +1598,23 @@ class Buzz(toga.App):
             return
         self.change_selected(
             lambda ids: self.store.set_label(label_id, ids, False),
-            "set_label",
-            label_id=label_id,
-            on=False,
+            "unlabel",
+            label=label_id,
         )
 
     def toggle_attention(self):
         on = not all(thread.attention for thread in self.selected_threads())
         self.change_selected(
-            lambda ids: self.store.set_attention(ids, on), "set_attention", on=on
+            lambda ids: self.store.set_attention(ids, on),
+            "label" if on else "unlabel",
+            label=ATTENTION,
         )
 
     def change_selected(
         self, change: Callable[[list[str]], None], action: str, **params
     ):
         """Make a change to the selected notifications with ``change``, and on
-        the other Buzz with ``action``, when showing a remote inbox.
+        the other Mac with ``action``, for an account that's there.
 
         A change can take the selected rows out of the list; the selection
         then moves on.
@@ -1644,7 +1622,7 @@ class Buzz(toga.App):
         if thread_ids := [t.id for t in self.selected_threads()]:
             index, before = self.selected_index(), len(self.table.data)
             change(thread_ids)
-            self.send_remote(action, thread_ids=thread_ids, **params)
+            self.send_remote(action, threads=thread_ids, **params)
             self.reload()
             self.move_selection_on(index, before)
 
@@ -1893,7 +1871,7 @@ class Buzz(toga.App):
         self.show_settings()
 
     def on_close_settings(self, widget=None, **kwargs):
-        if self.token or self.remote is not None:
+        if self.token or self.local_store is None:
             self.show_inbox()
         else:
             self.show_sign_in()
@@ -1905,7 +1883,7 @@ class Buzz(toga.App):
         """Ask the open account to sign in to GitHub: show a code to enter on
         GitHub, and wait until it has been."""
         self.cancel_sign_in()
-        login = self.local_store.get_meta("login")
+        login = self.login()
         intro = (
             f"Sign in to GitHub as {login} to triage their notifications."
             if login
@@ -1936,13 +1914,20 @@ class Buzz(toga.App):
             self.code_label,
             self.open_github_button,
         ]
-        if self.remote is not None:
-            # There's someone else's inbox to go back to.
-            children.append(
-                toga.Button(
-                    "Cancel", on_press=lambda widget, **kwargs: self.show_inbox()
-                )
-            )
+        if not login:
+            # An account with history of its own stays on this Mac.
+            children += [
+                toga.Label(
+                    textwrap.fill(
+                        "Or triage through Buzz on another Mac that's signed in. "
+                        "This Mac then doesn't need to sign in.",
+                        56,
+                    ),
+                    text_align=CENTER,
+                    margin=(28, 0, 8),
+                ),
+                toga.Button("Connect to Another Mac…", on_press=self.on_show_connect),
+            ]
         self.main_window.content = toga.Box(
             direction=COLUMN,
             justify_content=CENTER,
@@ -1992,7 +1977,7 @@ class Buzz(toga.App):
         finally:
             await client.aclose()
         # A store's history is one account's, and can't be taken apart again.
-        known = self.local_store.get_meta("login")
+        known = self.login()
         if known and known.casefold() != login.casefold():
             self.show_sign_in(
                 f"This account is {known}'s, but GitHub signed in as {login}. Sign "
@@ -2015,8 +2000,9 @@ class Buzz(toga.App):
         self.local_store.set_meta("login", login)
         self.name_account()
         self.token = token
-        self.connect(token)
-        await self.switch_inbox(None)
+        self.reload()
+        self.update_title()
+        self.start_syncing(token)
 
     async def on_sign_out(self, widget=None, **kwargs):
         if not self.token:
@@ -2029,19 +2015,18 @@ class Buzz(toga.App):
             )
         ):
             self.disconnect()
+            self.stop_sharing()
             self.delete_token()
             self.token = None
-            await self.switch_inbox(None)
+            self.show_sign_in()
 
     def sign_in_again(self, message: str):
         """The saved sign-in doesn't work any more: forget it, and ask again."""
         self.disconnect()
+        self.stop_sharing()
         self.delete_token()
         self.token = None
-        if self.remote is None:
-            self.show_sign_in(message)
-        else:
-            self.report(message)
+        self.show_sign_in(message)
 
     ######################################################################
     # Accounts
@@ -2049,7 +2034,7 @@ class Buzz(toga.App):
 
     def name_account(self):
         """Name the open account after its GitHub login, once that's known."""
-        login = self.local_store.get_meta("login")
+        login = self.login()
         if login and login != self.accounts.names.get(self.accounts.current):
             self.accounts.name(self.accounts.current, login)
             self.rebuild_account_commands()
@@ -2089,31 +2074,33 @@ class Buzz(toga.App):
             return
         self.cancel_sign_in()
         self.disconnect()
-        self.stop_hosting(forget=False)
-        if (old := self.remote) is not None:
-            self.remote = None
-            if old.task is not None:
-                old.task.cancel()
-            await old.client.aclose()
-            old.store.close()
-        self.local_store.close()
+        self.stop_sharing()
+        if self.share_window in self.windows:
+            self.share_window.close()
+        await self.close_remote()
+        if self.local_store is not None:
+            self.local_store.close()
+            self.local_store = None
 
         self.accounts.switch(account)
-        self.local_store = self.open_store(account)
+        if account not in self.accounts.remotes:
+            self.local_store = self.open_store(account)
         self.token = self.load_token()
+        self.show_new_inbox()
+        await self.open_account()
+
+    def show_new_inbox(self):
+        """Start showing the open account's inbox, from its inbox view."""
         self.view, self.reading = INBOX, None
         self.chosen_filters.clear()
         self.update_filter_menu()
         self.search.value = ""
         self.sidebar_cells.clear()
         self.rebuild_account_commands()
-        self.update_inbox_picker()
-        self.remove_remote_cmd.enabled = False
         self.table.data = []
         self.reload()
         macos.select_row(self.sidebar, 0)
         self.update_title()
-        await self.open_account()
 
     ######################################################################
     # Syncing our own inbox with GitHub
@@ -2178,133 +2165,137 @@ class Buzz(toga.App):
         if check_added:
             self.added_checked_at = time.monotonic()
         self.name_account()
-        if self.remote is None:
-            self.reload()
-            self.update_title()
+        self.reload()
+        self.update_title()
         self.report(f"Up to date. Last checked at {datetime.now():%H:%M}.")
         return sync.poll_interval
 
     ######################################################################
-    # Hosting: letting someone else's Buzz control this inbox
+    # Sharing: letting Buzz on another Mac triage this account through this one
     ######################################################################
 
-    def access_key(self) -> str:
-        """The key a controlling Buzz must send, made the first time it's needed."""
-        if not (key := self.load_secret(ACCESS_KEY)):
-            key = secrets.token_urlsafe(32)
-            self.save_secret(ACCESS_KEY, key)
-        return key
+    def share_code(self) -> str:
+        """The code another Mac must send, made the first time it's needed."""
+        if not (code := self.load_secret(SHARE_CODE)):
+            code = new_code()
+            self.save_secret(SHARE_CODE, code)
+        return code
 
-    def start_hosting(self) -> None:
-        self.stop_hosting(forget=False)
+    def start_sharing(self) -> str | None:
+        """Let Buzz on another Mac triage this inbox through this one. Returns
+        why it can't, if it can't."""
+        if self.server is not None:
+            return None
         api = HostAPI(
             self.local_store,
             github=lambda: self.github,
             on_change=self.on_remote_change,
             on_refresh=self.on_refresh_requested,
         )
+        port = self.share_port()
         try:
-            self.server = RemoteServer(
-                api, self.access_key(), self.loop, self.remote_port()
-            )
+            self.server = RemoteServer(api, self.share_code(), self.loop, port)
         except OSError as exc:
-            self.tunnel_status = f"Couldn't listen on port {self.remote_port()}: {exc}"
-            self.update_hosting_settings()
-            return
+            return f"Couldn't share this inbox on port {port}: {exc.strerror or exc}"
         self.server.start()
-        self.local_store.set_meta("hosting", "on")
-
-        if token := self.load_secret(TUNNEL_TOKEN):
-            stop_stale_cloudflared(self.local_store.get_meta("tunnel_process"))
-            self.tunnel = self.make_tunnel(token)
-            self.tunnel.start()
-        else:
-            self.tunnel_status = "Paste the tunnel token, then Save, to connect."
         self.update_title()
-        self.update_hosting_settings()
+        self.report(self.status_text)
+        return None
 
-    def stop_hosting(self, forget: bool = True) -> None:
-        """Stop serving and close the tunnel. ``forget=False`` keeps the setting
-        on, such as when quitting, so it comes back on next time."""
-        if self.tunnel is not None:
-            self.tunnel.stop()
-            self.tunnel = None
-            self.local_store.set_meta("tunnel_process", None)
+    def stop_sharing(self) -> None:
+        """Stop sharing. Whether to share next time is kept."""
         if self.server is not None:
             self.server.stop()
             self.server = None
-        if forget:
-            self.local_store.set_meta("hosting", None)
-        self.tunnel_status = ""
-        self.update_title()
-        self.update_hosting_settings()
+            self.last_remote_change = ""
+            self.update_title()
+            self.report(self.status_text)
 
-    def remote_port(self) -> int:
-        return REMOTE_PORT
-
-    def update_hosting_settings(self) -> None:
-        hosting = self.server is not None
-        self.hosting_switch.value = hosting
-        self.access_key_display.value = self.load_secret(ACCESS_KEY) or ""
-        if hosting:
-            lines = [f"On: serving on localhost:{self.server.port}."]
-            if self.tunnel_status:
-                lines.append(self.tunnel_status)
-            if self.last_remote_change:
-                lines.append(f"Last remote change: {self.last_remote_change}.")
-        else:
-            lines = ["Off." + (f" {self.tunnel_status}" if self.tunnel_status else "")]
-        self.hosting_status.text = "\n".join(textwrap.fill(line, 64) for line in lines)
-
-    def on_toggle_hosting(self, switch: toga.Switch, **kwargs):
-        if switch.value and self.server is None:
-            self.start_hosting()
-        elif not switch.value and self.server is not None:
-            self.stop_hosting()
-
-    def on_save_tunnel_token(self, widget, **kwargs):
-        if token := self.tunnel_token_input.value.strip():
-            self.save_secret(TUNNEL_TOKEN, token)
-            self.tunnel_token_input.value = ""
-            self.tunnel_status = "Tunnel token saved."
-            if self.server is not None:
-                self.start_hosting()  # Restart with the new token.
-            self.update_hosting_settings()
-
-    def on_copy_access_key(self, widget, **kwargs):
-        macos.copy_to_clipboard(self.access_key())
-        self.update_hosting_settings()
-
-    async def on_new_access_key(self, widget, **kwargs):
-        if self.load_secret(ACCESS_KEY) and not await self.main_window.dialog(
-            toga.ConfirmDialog(
-                "Make a New Access Key?",
-                "The current key will stop working straight away. You'll need to "
-                "send the new one to whoever controls this inbox.",
-            )
-        ):
+    def on_show_share(self, command=None, **kwargs):
+        if self.share_window in self.windows:
+            self.share_window.show()
             return
-        key = secrets.token_urlsafe(32)
-        self.save_secret(ACCESS_KEY, key)
-        if self.server is not None:
-            self.server.key = key
-        self.update_hosting_settings()
+        if self.local_store is None:
+            return
+        code = toga.TextInput(
+            value=self.share_code(), readonly=True, flex=1, font_family="monospace"
+        )
+        message = toga.Label("", font_size=11)
 
-    def on_tunnel_status(self, status: str) -> None:
-        self.tunnel_status = status
-        # Remember which cloudflared is ours (it changes on restarts), so it
-        # can be stopped next time if Buzz doesn't quit cleanly.
-        if self.tunnel is not None and (record := self.tunnel.process_record()):
-            self.local_store.set_meta("tunnel_process", record)
-        self.update_hosting_settings()
+        def share(switch, **kwargs):
+            if switch.value:
+                if error := self.start_sharing():
+                    switch.value = False
+                    message.text = textwrap.fill(error, 66)
+                    return
+                self.local_store.set_meta("share", "on")
+            else:
+                self.local_store.set_meta("share", None)
+                self.stop_sharing()
+            message.text = ""
+
+        def new(widget, **kwargs):
+            code.value = new_code()
+            self.save_secret(SHARE_CODE, code.value)
+            if self.server is not None:
+                self.server.code = code.value
+            message.text = textwrap.fill(
+                "A Mac using the old code has to connect again with this one.", 66
+            )
+
+        login = self.login()
+        explanation = (
+            (
+                f"Buzz on another Mac can triage {login}'s notifications through "
+                "this one, so it doesn't need to sign in to GitHub. Everything it "
+                "does happens here, and your GitHub sign-in never leaves this Mac."
+            ),
+            (
+                "To reach this Mac from elsewhere, point a tunnel, such as "
+                f"Cloudflare's, at http://localhost:{PORT}. Then, on the other "
+                "Mac, choose File → Add Account…, then Connect to Another Mac…, "
+                "and enter the tunnel's address and this code:"
+            ),
+        )
+        window = toga.Window(
+            title="Share This Inbox",
+            size=(520, 360),
+            resizable=False,
+            minimizable=False,
+        )
+        self.share_switch = toga.Switch(
+            "Share this inbox", value=self.server is not None, on_change=share
+        )
+        window.content = toga.Box(
+            direction=COLUMN,
+            margin=16,
+            gap=12,
+            children=[
+                self.share_switch,
+                *[toga.Label(textwrap.fill(text, 68)) for text in explanation],
+                code,
+                message,
+                toga.Box(
+                    direction=ROW,
+                    gap=8,
+                    children=[
+                        toga.Button("New Code", on_press=new),
+                        toga.Box(flex=1),
+                        toga.Button(
+                            "Done", on_press=lambda widget, **kwargs: window.close()
+                        ),
+                    ],
+                ),
+            ],
+        )
+        self.share_window = window
+        window.show()
 
     def on_remote_change(self, description: str) -> None:
-        """Their Buzz changed our inbox: show it, and say so."""
+        """The other Mac changed this inbox: show it, and say so."""
         self.last_remote_change = f"{description} at {datetime.now():%H:%M}"
-        self.report(self.local_status)  # Adds the note about the change.
-        if self.remote is None:
-            self.reload()
-        self.update_hosting_settings()
+        self.report(self.status_text)  # Adds the note about the change.
+        self.reload()
 
     def on_refresh_requested(self) -> None:
         if self.github is not None:
@@ -2312,68 +2303,125 @@ class Buzz(toga.App):
             self.wake.set()
 
     ######################################################################
-    # Controlling someone else's Buzz
+    # Triaging an account through Buzz on another Mac
     ######################################################################
 
-    def remote_configs(self) -> list[dict]:
-        """The remote inboxes we know: name, address and Access client ID."""
-        return json.loads(self.local_store.get_meta("remotes") or "[]")
+    def on_show_connect(self, widget=None, **kwargs):
+        address = toga.TextInput(placeholder="https://buzz.example.com", flex=1)
+        code = toga.PasswordInput(placeholder="Code", flex=1)
+        message = toga.Label(
+            textwrap.fill(
+                "Buzz on the other Mac shows its code in File → Share This Inbox….",
+                64,
+            ),
+            font_size=11,
+        )
+        window = toga.Window(
+            title="Connect to Another Mac",
+            size=(460, 200),
+            resizable=False,
+            minimizable=False,
+        )
 
-    def update_inbox_picker(self) -> None:
-        names = [MY_INBOX] + [config["name"] for config in self.remote_configs()]
-        self.picking_inbox = True
+        async def connect(widget, **kwargs):
+            connect_button.enabled = False
+            message.text = "Connecting…"
+            try:
+                client = self.make_remote_client(address.value, code.value.strip())
+            except ValueError as exc:
+                message.text = textwrap.fill(str(exc), 64)
+                connect_button.enabled = True
+                return
+            try:
+                await client.state()
+            except RemoteError as exc:
+                await client.aclose()
+                message.text = textwrap.fill(str(exc), 64)
+                connect_button.enabled = True
+                return
+            window.close()
+            await self.use_remote(client, code.value.strip())
+
+        connect_button = toga.Button("Connect", on_press=connect)
+        code.on_confirm = connect
+        window.content = toga.Box(
+            direction=COLUMN,
+            margin=16,
+            gap=8,
+            children=[
+                address,
+                code,
+                message,
+                toga.Box(
+                    direction=ROW,
+                    gap=8,
+                    children=[
+                        toga.Box(flex=1),
+                        toga.Button(
+                            "Cancel", on_press=lambda widget, **kwargs: window.close()
+                        ),
+                        connect_button,
+                    ],
+                ),
+            ],
+        )
+        self.connect_window = window
+        window.show()
+        address.focus()
+
+    async def use_remote(self, client: RemoteClient, code: str):
+        """Triage the open account through Buzz on another Mac from now on."""
         try:
-            self.inbox_picker.items = names
-            self.inbox_picker.value = self.remote.name if self.remote else MY_INBOX
-        finally:
-            self.picking_inbox = False
-        # Only worth showing when there's a choice.
-        set_shown(self.sidebar_column, self.inbox_picker_row, len(names) > 1, 0)
-
-    async def on_pick_inbox(self, widget, **kwargs):
-        if self.picking_inbox or widget.value is None:
+            self.save_secret(CONNECT_CODE, code)
+        except credentials.KeyringError as exc:
+            await client.aclose()
+            await self.main_window.dialog(
+                toga.ErrorDialog(
+                    "Couldn't Connect",
+                    f"Couldn't save the code in the Keychain: {exc}",
+                )
+            )
             return
-        name = None if widget.value == MY_INBOX else widget.value
-        if name != (self.remote.name if self.remote else None):
-            await self.switch_inbox(name)
+        self.cancel_sign_in()
+        self.accounts.connect(self.accounts.current, client.url)
+        if self.local_store is not None:
+            self.local_store.close()
+            self.local_store = None
+        self.start_remote(client)
 
-    async def switch_inbox(self, name: str | None) -> None:
-        """Show our own inbox (``name=None``), or a remote one."""
-        if (old := self.remote) is not None:
+    def start_remote(self, client: RemoteClient):
+        self.remote = RemoteInbox(client)
+        self.remote.task = self.loop.create_task(self.remote_sync_forever(self.remote))
+        self.report(f"Connecting to {client.host}…")
+        self.show_new_inbox()
+        self.show_inbox()
+        self.schedule_detail_update()
+
+    async def close_remote(self):
+        if (remote := self.remote) is not None:
             self.remote = None
-            if old.task is not None:
-                old.task.cancel()
-            await old.client.aclose()
-            old.store.close()
+            if remote.task is not None:
+                remote.task.cancel()
+            await remote.client.aclose()
 
-        if name is not None:
-            config = next(c for c in self.remote_configs() if c["name"] == name)
-            key_name, access_secret_name = remote_secret_names(config["url"])
-            client = self.make_remote_client(
-                config["url"],
-                self.load_secret(key_name) or "",
-                config.get("access_id"),
-                self.load_secret(access_secret_name),
-            )
-            self.remote = RemoteInbox(name, client)
-            self.remote.task = self.loop.create_task(
-                self.remote_sync_forever(self.remote)
-            )
-            self.set_status(f"Connecting to {name}'s Buzz…")
-        else:
-            self.set_status(self.local_status)
+    async def on_disconnect_remote(self, widget=None, **kwargs):
+        await self.disconnect_remote()
 
-        self.view = INBOX
-        self.table.data = self.thread_rows()
-        self.reload()
-        macos.select_row(self.sidebar, 0)
-        self.remove_remote_cmd.enabled = self.remote is not None
-        self.update_inbox_picker()
-        self.update_title()
-        if self.remote is None and not self.token:
-            self.show_sign_in()
-        else:
-            self.show_inbox()
+    async def disconnect_remote(self, message: str = ""):
+        """Stop triaging through the other Mac. The account is then on this Mac
+        again, and not signed in."""
+        account = self.accounts.current
+        await self.close_remote()
+        try:
+            self.delete_secret(CONNECT_CODE)
+        except credentials.KeyringError:
+            traceback.print_exc()
+        self.accounts.disconnect(account)
+        self.local_store = self.open_store(account)
+        self.token = self.load_token()
+        self.show_new_inbox()
+        self.report("")
+        self.show_sign_in(message)
 
     async def remote_sync_forever(self, remote: RemoteInbox) -> None:
         while True:
@@ -2389,25 +2437,34 @@ class Buzz(toga.App):
             return  # Changes are on their way; look once they've arrived.
         try:
             snapshot, etag = await remote.client.state(remote.etag)
-        except RemoteError as exc:
+            if remote.pending or remote is not self.remote:
+                return  # Out of date already.
+            if snapshot is not None:
+                remote.mirror.load(snapshot)
+        except NotPaired as exc:
+            self.report(
+                f"⚠️ {exc} If it's made a new one, choose File → Disconnect from "
+                "Other Mac, then connect again with that.",
+                remote,
+            )
+            return
+        except (RemoteError, ValueError) as exc:
             self.report(f"⚠️ {exc}", remote)
             return
-        if remote.pending or remote is not self.remote:
-            return  # Out of date already.
         if snapshot is not None:
-            remote.store.load_snapshot(snapshot)
             remote.etag = etag
+            self.name_account()
             self.reload()
             self.update_title()
         self.report(
-            f"Showing {remote.name}'s inbox. Last checked at "
+            f"Triaging through {remote.host}. Last checked at "
             f"{datetime.now():%H:%M:%S}.",
             remote,
         )
 
     def send_remote(self, action: str, **params) -> None:
-        """When showing a remote inbox, make a change on their Buzz too. (The
-        change has already been made to our copy.)"""
+        """For an account on another Mac, make a change there too. (The change
+        has already been made to the copy here.)"""
         if (remote := self.remote) is None:
             return
         remote.pending += 1
@@ -2417,7 +2474,7 @@ class Buzz(toga.App):
                 await remote.client.action(action, **params)
             except RemoteError as exc:
                 await self.main_window.dialog(
-                    toga.ErrorDialog("Couldn't change their inbox", str(exc))
+                    toga.ErrorDialog("Couldn't change the other Mac's inbox", str(exc))
                 )
             finally:
                 self.remote_changed(remote)
@@ -2425,83 +2482,11 @@ class Buzz(toga.App):
         self.loop.create_task(send())
 
     def remote_changed(self, remote: RemoteInbox) -> None:
-        """A change to a remote inbox has finished: fetch the real result."""
+        """A change to the other Mac's inbox has finished: fetch the real
+        result."""
         remote.pending -= 1
         remote.etag = None
         remote.wake.set()
-
-    async def on_add_remote(self, command=None, **kwargs):
-        answers = await self.ask_form(
-            "Add Remote Inbox",
-            [
-                ("name", "Whose inbox is it?", "", False),
-                ("url", "Address (the tunnel's public hostname)", "https://", False),
-                ("key", "Access key (from their Buzz's settings)", "", True),
-                ("access_id", "Cloudflare Access client ID (optional)", "", False),
-                (
-                    "access_secret",
-                    "Cloudflare Access client secret (optional)",
-                    "",
-                    True,
-                ),
-            ],
-            "Connect",
-        )
-        if answers is None:
-            return
-        name = " ".join(answers["name"].split())
-        try:
-            if not name or name == MY_INBOX:
-                raise ValueError("Give the inbox a name, such as theirs.")
-            if name in [c["name"] for c in self.remote_configs()]:
-                raise ValueError(f"There's already a remote inbox called {name}.")
-            url = check_address(answers["url"])
-            client = self.make_remote_client(
-                url,
-                answers["key"].strip(),
-                answers["access_id"].strip() or None,
-                answers["access_secret"].strip() or None,
-            )
-            try:
-                await client.ping()
-            finally:
-                await client.aclose()
-        except (ValueError, RemoteError) as exc:
-            await self.main_window.dialog(
-                toga.ErrorDialog("Couldn't add the remote inbox", str(exc))
-            )
-            return
-
-        key_name, access_secret_name = remote_secret_names(url)
-        self.save_secret(key_name, answers["key"].strip())
-        if secret := answers["access_secret"].strip():
-            self.save_secret(access_secret_name, secret)
-        configs = self.remote_configs() + [
-            {
-                "name": name,
-                "url": url,
-                "access_id": answers["access_id"].strip() or None,
-            }
-        ]
-        self.local_store.set_meta("remotes", json.dumps(configs))
-        await self.switch_inbox(name)
-
-    async def on_remove_remote(self, command=None, **kwargs):
-        if (remote := self.remote) is None:
-            return
-        if not await self.main_window.dialog(
-            toga.ConfirmDialog(
-                "Remove Remote Inbox?",
-                f"Buzz will forget how to reach {remote.name}'s inbox. Nothing "
-                "changes in their inbox.",
-            )
-        ):
-            return
-        for name in remote_secret_names(remote.client.url):
-            self.delete_secret(name)
-        configs = [c for c in self.remote_configs() if c["name"] != remote.name]
-        self.local_store.set_meta("remotes", json.dumps(configs))
-        await self.switch_inbox(None)
 
 
 def main():

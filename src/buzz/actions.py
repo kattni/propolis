@@ -20,7 +20,7 @@ CONCURRENCY = 8
 
 
 async def add_thread(
-    store: Store, client, text: str, label_id: int | None = None
+    store: Store, client, text: str, label_id: str | None = None
 ) -> Thread:
     """Add an issue, pull request or discussion by hand.
 

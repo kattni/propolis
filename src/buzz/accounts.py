@@ -14,8 +14,9 @@ they've always had."""
 class Accounts:
     """The GitHub accounts you triage. One is open at a time.
 
-    Each has its own store, so its own labels and history, and its own GitHub
-    sign-in. The list lives in ``accounts.json``, beside the stores.
+    An account is either on this Mac, with its own store, so its own labels and
+    history, and its own GitHub sign-in, or it's on another Mac, through Buzz
+    there. The list lives in ``accounts.json``, beside the stores.
     """
 
     def __init__(self, data: Path):
@@ -27,6 +28,9 @@ class Accounts:
             saved = {}
         #: Each account's GitHub login, once Buzz knows it.
         self.names: dict[str, str | None] = saved.get("names") or {DEFAULT: None}
+        #: The address of Buzz on another Mac, for each account that's there
+        #: rather than here.
+        self.remotes: dict[str, str] = saved.get("remotes") or {}
         current = saved.get("current", DEFAULT)
         self.current = current if current in self.names else DEFAULT
 
@@ -51,9 +55,21 @@ class Accounts:
         self.names[account] = login
         self._save()
 
+    def connect(self, account: str, url: str) -> None:
+        """Triage the account through Buzz at ``url``. Its store here, if it has
+        one, is left as it is."""
+        self.remotes[account] = url
+        self._save()
+
+    def disconnect(self, account: str) -> None:
+        self.remotes.pop(account, None)
+        self._save()
+
     def _save(self) -> None:
         self._file.write_text(
-            json.dumps({"current": self.current, "names": self.names}),
+            json.dumps(
+                {"current": self.current, "names": self.names, "remotes": self.remotes}
+            ),
             encoding="utf-8",
         )
 

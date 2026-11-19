@@ -3,7 +3,8 @@ from dataclasses import replace
 
 import pytest
 
-from buzz.store import ATTENTION, DEFAULT_LABELS, DONE, INBOX, UNREAD, Store, Thread
+from buzz.state import DEFAULT_LABELS
+from buzz.store import ATTENTION, DONE, INBOX, UNREAD, Store, Thread
 
 
 def thread(id, updated_at="2026-11-01T10:00:00Z", unread=True, title="A thread"):
@@ -169,8 +170,8 @@ def test_only_flagging_labels_flag_activity(store, clock):
 def test_labels(store):
     store.place([thread("1"), thread("2")])
     later = store.create_label("Later")
-    review = store.create_label("  needs   review ")
-    assert review.name == "needs review"
+    review = store.create_label("  needs   a   reply ")
+    assert review.name == "needs a reply"
     assert later.color != review.color
 
     store.set_label(later.id, ["1", "2"], on=True)
@@ -180,7 +181,7 @@ def test_labels(store):
 
     edited = store.edit_label(later.id, "Someday", flag=True)
     assert edited.flag
-    assert store.labels() == [edited, review]
+    assert store.labels()[-2:] == [edited, review]
 
     store.delete_label(review.id)
     assert store.labels_by_thread() == {"1": [edited]}
@@ -189,7 +190,8 @@ def test_labels(store):
 def test_reordering_labels(store):
     a, _, c = (store.create_label(name) for name in "ABC")
     store.reorder_labels([c.id, a.id])
-    assert [label.name for label in store.labels()] == ["C", "A", "B"]
+    names = [label.name for label in store.labels()]
+    assert names[:2] == ["C", "A"] and names[-1] == "B"
 
 
 def test_labelled_threads_leave_the_inbox_for_good(store):
@@ -205,18 +207,38 @@ def test_labelled_threads_leave_the_inbox_for_good(store):
     assert ids(store.threads(label.id)) == ["2", "1"]
 
 
-def test_default_labels_are_added_once(store):
-    store.add_default_labels()
+def test_default_labels(tmp_path):
+    store = Store(tmp_path / "buzz.sqlite3")
     labels = store.labels()
-    assert [label.name for label in labels] == [n for n, _, _ in DEFAULT_LABELS]
+    assert [label.name for label in labels] == [n for _, n, _, _ in DEFAULT_LABELS]
     assert [label.name for label in labels if label.flag] == [
         "Blocked",
         "High priority",
     ]
 
+    # Deleted defaults don't come back.
     store.delete_label(labels[0].id)
-    store.add_default_labels()
+    store.close()
+    store = Store(tmp_path / "buzz.sqlite3")
     assert len(store.labels()) == len(DEFAULT_LABELS) - 1
+    store.close()
+
+
+def test_reopening_replays_the_same_triage(tmp_path, clock):
+    store = Store(tmp_path / "buzz.sqlite3")
+    store.place([thread("1")])
+    waiting = store.create_label("Waiting", flag=True)
+    store.set_label(waiting.id, ["1"], on=True)
+    store.record_activity("1", "2026-11-11T00:00:00Z")
+    # Dealt with after the activity that flagged it.
+    clock.time = "2026-11-12T00:00:00.000000Z"
+    store.set_attention(["1"], on=False)
+    store.close()
+
+    store = Store(tmp_path / "buzz.sqlite3")
+    assert ids(store.threads(waiting.id)) == ["1"]
+    assert store.threads(ATTENTION) == []
+    store.close()
 
 
 def test_old_stores_are_upgraded(tmp_path):
@@ -243,12 +265,16 @@ def test_old_stores_are_upgraded(tmp_path):
     )
     old.close()
 
+    # Upgrading it turns its tables into events, which opening it again
+    # replays.
+    Store(path).close()
     store = Store(path)
     # What was unread on GitHub has something new.
     assert store.get("1").new and not store.get("2").new
     # Done takes labels off now, so a labelled thread that was done isn't.
-    assert ids(store.threads(1)) == ["2"] and not store.get("2").done
-    assert [(label.name, label.flag) for label in store.labels()] == [
+    later = store.labels()[0]
+    assert ids(store.threads(later.id)) == ["2"] and not store.get("2").done
+    assert [(label.name, label.flag) for label in store.labels()][:2] == [
         ("Later", False),
         ("blocked", True),
     ]

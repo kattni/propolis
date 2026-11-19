@@ -86,6 +86,44 @@ class Sync:
 
         threads = await _gather([self.identify(t) for t in snapshot.threads])
         to_check = []
+        with store.batch():
+            self._place(threads, to_check)
+
+        results = await _gather(
+            [
+                self.client.latest_activity(thread, since, self.me)
+                for thread, since in to_check
+            ],
+            return_exceptions=True,
+        )
+        checked = True
+        with store.batch():
+            for (thread, _), result in zip(to_check, results):
+                if isinstance(result, AuthenticationError):
+                    raise result
+                if isinstance(result, Exception):
+                    logger.warning(
+                        "Couldn't check %s for activity: %s", thread.id, result
+                    )
+                    checked = False
+                    continue
+                if result is not None:
+                    store.record_activity(thread.id, result)
+                store.set_checked(thread.id, thread.updated_at)
+        if full:
+            store.mark_gone(thread.id for thread in threads)
+        # If a thread couldn't be checked, look at the same threads next time.
+        if checked:
+            if threads:
+                since = max((thread.updated_at for thread in threads), key=stamp)
+                store.set_meta("notifications_since", since)
+            store.set_meta("last_modified", snapshot.last_modified)
+        self._read_whole_inbox = False
+
+    def _place(self, threads: list[Thread], to_check: list) -> None:
+        """Put new threads in the inbox, and add the others to ``to_check`` if
+        they need checking for activity."""
+        store = self.store
         for thread in threads:
             known = store.get(thread.id)
             if known is None and (manual := store.thread_with_url(thread.url, True)):
@@ -102,35 +140,6 @@ class Sync:
                 stamp(thread.updated_at) > known.checked_until
             ):
                 to_check.append((thread, known.checked_until))
-
-        results = await _gather(
-            [
-                self.client.latest_activity(thread, since, self.me)
-                for thread, since in to_check
-            ],
-            return_exceptions=True,
-        )
-        checked = True
-        for (thread, _), result in zip(to_check, results):
-            if isinstance(result, AuthenticationError):
-                raise result
-            if isinstance(result, Exception):
-                logger.warning("Couldn't check %s for activity: %s", thread.id, result)
-                checked = False
-                continue
-            if result is not None:
-                store.record_activity(thread.id, result)
-            store.set_checked(thread.id, thread.updated_at)
-
-        if full:
-            store.mark_gone(thread.id for thread in threads)
-        # If a thread couldn't be checked, look at the same threads next time.
-        if checked:
-            if threads:
-                since = max((thread.updated_at for thread in threads), key=stamp)
-                store.set_meta("notifications_since", since)
-            store.set_meta("last_modified", snapshot.last_modified)
-        self._read_whole_inbox = False
 
     async def identify(self, thread: Thread) -> Thread:
         """Give a discussion's notification the discussion's URL, which it
@@ -157,35 +166,41 @@ class Sync:
     async def sync_ci(self) -> None:
         """Count a CI failure on one of your open pull requests as activity on
         it, at the time the check failed. One Buzz doesn't have yet goes in the
-        inbox, with the reason "Failing CI"."""
+        inbox, with the reason "Failing CI".
+
+        The same failure, seen again, is the same activity, so it only counts
+        once.
+        """
         store = self.store
         try:
             failures = await self.client.ci_failures()
         except GitHubError as exc:
             logger.warning("Couldn't check your pull requests' CI: %s", exc)
             return
-        for failure in failures:
-            ref = f"{failure.repo}#{failure.number}"
-            if (seen := store.ci_failure(ref)) and stamp(failure.failed_at) <= seen:
-                continue
-            if (thread_id := store.thread_with_url(failure.url)) is None:
-                thread_id = store.add_manual(
-                    Thread(
-                        id=f"{MANUAL_PREFIX}{ref}",
-                        repo=failure.repo,
-                        repo_url=f"https://github.com/{failure.repo}",
-                        title=failure.title,
-                        type="PullRequest",
-                        url=failure.url,
-                        latest_comment_url=None,
-                        reason="ci_failure",
-                        unread=False,
-                        updated_at=failure.updated_at,
-                    ),
-                    seen=False,
-                )
-            store.record_activity(thread_id, failure.failed_at)
-            store.set_ci_failure(ref, failure.failed_at)
+        with store.batch():
+            for failure in failures:
+                self._record_failure(failure)
+
+    def _record_failure(self, failure) -> None:
+        store = self.store
+        ref = f"{failure.repo}#{failure.number}"
+        if (thread_id := store.thread_with_url(failure.url)) is None:
+            thread_id = store.add_manual(
+                Thread(
+                    id=f"{MANUAL_PREFIX}{ref}",
+                    repo=failure.repo,
+                    repo_url=f"https://github.com/{failure.repo}",
+                    title=failure.title,
+                    type="PullRequest",
+                    url=failure.url,
+                    latest_comment_url=None,
+                    reason="ci_failure",
+                    unread=False,
+                    updated_at=failure.updated_at,
+                ),
+                seen=False,
+            )
+        store.record_activity(thread_id, failure.failed_at)
 
     async def check_added(self) -> None:
         """Look for activity on threads added by hand, which GitHub doesn't
@@ -198,18 +213,23 @@ class Sync:
                 if thread.checked_until and (
                     stamp(fresh.updated_at) <= thread.checked_until
                 ):
-                    return
+                    return None
                 latest = await client.latest_activity(
                     replace(thread, updated_at=fresh.updated_at),
                     thread.checked_until,
                     self.me,
                 )
             except GitHubError:
-                return  # Deleted, or no longer readable; try again next time.
+                return None  # Deleted, or no longer readable; try again next time.
             # Keep the ID even if the repository has been renamed.
-            store.update_manual(replace(fresh, id=thread.id), latest)
+            return replace(fresh, id=thread.id), latest
 
-        await _gather([check(thread) for thread in store.manual_threads_to_check()])
+        found = await _gather(
+            [check(thread) for thread in store.manual_threads_to_check()]
+        )
+        with store.batch():
+            for fresh, latest in filter(None, found):
+                store.update_manual(fresh, latest)
 
     async def look_up_states(self) -> None:
         """Find out whether issues, pull requests and discussions with new
