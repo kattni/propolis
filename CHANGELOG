@@ -1,5 +1,12 @@
 # Propolis Release Notes
 
+## 0.1.1 (19 Nov 2026)
+
+* Propolis now talks to GitHub, and to Propolis on your other Macs, using
+  httpx2, the maintained continuation of httpx.
+* Secure connections are checked against the certificates your Mac trusts,
+  instead of a list bundled with the app.
+
 ## 0.1.0 (19 Nov 2026)
 
 A rebuild of the app. Triage works as it did in 0.0.1: threads stay in their
