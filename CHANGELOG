@@ -1,7 +1,39 @@
 # Propolis Release Notes
 
-## 0.1.0 (18 Nov 2026)
+## 0.1.0 (19 Nov 2026)
 
-* Initial release: a GitHub notifications inbox with Inbox, Unread and Done
-  views, local labels, and Open, Mark as Read, Mark as Done and Unsubscribe
-  actions.
+A rebuild of the app. Triage works as it did in 0.0.1: threads stay in their
+labels in the order you filed them, labels can flag on activity, and only
+activity that needs a response from you counts. What's around it is new.
+
+* Unread and Done views, beside the Inbox and your labels. Threads you clear on
+  github.com go to Done the next time Propolis starts, unless they have a
+  label.
+* A toolbar, with Add by Number, Refresh, Open on GitHub, Mark as Read, Mark as
+  Done and Unsubscribe, a Label menu that adds or takes off any label, and a
+  Filter menu.
+* Mark as Read (⇧⌘U) and Unsubscribe (⇧⌘M). Unsubscribing also marks the
+  thread as done.
+* Label several threads at once, by selecting them and pressing a label's
+  number.
+* Search the current view by title or repository. The Filter menu lists the
+  types, reasons and repositories in the view, with how many threads each
+  would show.
+* An address bar above the reading pane, with Back, Forward and Reload. Links
+  to other sites open in your browser.
+* Icons coloured by state, as on GitHub, and icons for commits, CI runs,
+  Dependabot and security alerts, and invitations.
+* Labels as coloured pills beside the address of the thread you're reading,
+  and a yellow alert icon on threads that need attention.
+* Settings (⌘,).
+* Threads you add by number are checked for activity every 10 minutes.
+
+Upgrading from 0.0.1: 0.1.0 keeps its data in the same place, but doesn't read
+0.0.1's labels, triage history or GitHub sign-in, so it starts with the default
+labels and asks you to sign in again. It keeps 0.0.1's list of accounts, and
+leaves 0.0.1's labels and history as they are. To share an inbox with another
+Mac, use 0.1.0 on both of them.
+
+## 0.0.1 (03 Nov 2026)
+
+* Initial release
