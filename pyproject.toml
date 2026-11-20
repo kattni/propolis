@@ -2,7 +2,7 @@
 [tool.briefcase]
 project_name = "Propolis"
 bundle = "com.kattni"
-version = "0.1.2"
+version = "0.1.3"
 url = "https://github.com/kattni/propolis"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]

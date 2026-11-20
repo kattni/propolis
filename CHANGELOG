@@ -1,5 +1,12 @@
 # Propolis Release Notes
 
+## 0.1.3 (19 Nov 2026)
+
+* Done only lists the threads marked as done in the last seven days.
+  Activity still brings older ones back to the inbox.
+* A Done today switch, beside the search field in Done, lists just the
+  threads marked as done today.
+
 ## 0.1.2 (19 Nov 2026)
 
 * No changes to the app. The tests now close the stores they open, so they
