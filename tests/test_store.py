@@ -140,6 +140,20 @@ def test_done_takes_labels_off_until_there_is_new_activity(store, clock):
     assert ids(store.threads(INBOX)) == ["1"]
 
 
+def test_done_only_goes_back_seven_days(store, clock):
+    store.place([thread("1"), thread("2"), thread("3")])
+    clock.time = "2026-11-02T00:00:00.000000Z"
+    store.mark_done(["1"])
+    clock.time = "2026-11-08T00:00:00.000000Z"
+    store.mark_done(["2"])
+    clock.time = "2026-11-10T09:00:00.000000Z"
+    store.mark_done(["3"])
+
+    assert sorted(ids(store.threads(DONE))) == ["2", "3"]
+    assert store.counts()[DONE] == 2
+    assert ids(store.threads(DONE, done_since="2026-11-10T00:00:00.000000Z")) == ["3"]
+
+
 def test_only_flagging_labels_flag_activity(store, clock):
     store.place([thread("1"), thread("2")])
     blocked = store.create_label("Waiting", flag=True)

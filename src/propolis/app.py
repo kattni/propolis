@@ -43,7 +43,18 @@ from .remote import (
     RemoteServer,
     new_code,
 )
-from .store import ATTENTION, DONE, INBOX, UNREAD, Inbox, Label, Mirror, Store, Thread
+from .store import (
+    ATTENTION,
+    DONE,
+    INBOX,
+    UNREAD,
+    Inbox,
+    Label,
+    Mirror,
+    Store,
+    Thread,
+    start_of_today,
+)
 from .sync import Sync, WrongSignIn
 
 ATTENTION_NAME = "⚠️ Attention required"
@@ -733,6 +744,12 @@ class Propolis(toga.App):
             on_change=self.on_filter,
             flex=1,
         )
+        # Beside the search field, in the done view only (see
+        # show_view_options).
+        self.done_today = toga.Switch("Done today", on_change=self.on_filter)
+        self.search_row = toga.Box(
+            direction=ROW, gap=8, margin=8, align_items=CENTER, children=[self.search]
+        )
         self.table = toga.Table(
             columns=[
                 AccessorColumn("", "kind"),
@@ -749,13 +766,7 @@ class Propolis(toga.App):
         macos.on_list_keys(
             self.table, on_number=self.on_number_key, on_delete=self.on_delete_key
         )
-        listing = toga.Box(
-            direction=COLUMN,
-            children=[
-                toga.Box(direction=ROW, margin=8, children=[self.search]),
-                self.table,
-            ],
-        )
+        listing = toga.Box(direction=COLUMN, children=[self.search_row, self.table])
 
         # The selected notification's page on GitHub, under an address bar
         # (or, when there isn't just one, a note saying so).
@@ -1002,7 +1013,9 @@ class Propolis(toga.App):
         """The Filter menu: each value of each filter in the current view, with
         how many notifications choosing it would show."""
         chosen = self.chosen_filters
-        counts = self.store.filter_counts(self.view, self.search.value, chosen)
+        counts = self.store.filter_counts(
+            self.view, self.search.value, chosen, self.done_since()
+        )
         items = [MenuItem("Clear Filters", self.clear_filters, enabled=bool(chosen))]
         for column, heading, describe in FILTERS:
             found = counts[column]
@@ -1068,7 +1081,9 @@ class Propolis(toga.App):
             stays while it's being read.
         """
         labels = self.store.labels_by_thread()
-        threads = self.store.threads(self.view, self.search.value, self.chosen_filters)
+        threads = self.store.threads(
+            self.view, self.search.value, self.chosen_filters, self.done_since()
+        )
         if (
             keep is not None
             and self.view == UNREAD
@@ -1079,6 +1094,19 @@ class Propolis(toga.App):
         ):
             threads.insert(index, thread)
         return [self.thread_row(thread) for thread in threads]
+
+    def done_since(self) -> str | None:
+        """How far back the done view goes, if Done today is on."""
+        return start_of_today() if self.done_today.value else None
+
+    def show_view_options(self):
+        """Show Done today in the done view, and only there. (Toga doesn't
+        hide widgets with display=NONE yet.)"""
+        shown = self.done_today in self.search_row.children
+        if self.view == DONE and not shown:
+            self.search_row.add(self.done_today)
+        elif self.view != DONE and shown:
+            self.search_row.remove(self.done_today)
 
     def thread_row(self, thread: Thread) -> dict:
         # Needing attention means new activity, so it takes the new-activity
@@ -1194,6 +1222,7 @@ class Propolis(toga.App):
 
     def select_view(self, key: str):
         self.view = key
+        self.show_view_options()
         self.table.data = self.thread_rows()
         self.reload()
         if (index := self.sidebar_index(key)) is not None:
@@ -1211,6 +1240,7 @@ class Propolis(toga.App):
                 self.loop.call_soon(macos.select_row, self.sidebar, index)
         elif row.key != self.view:
             self.view = row.key
+            self.show_view_options()
             self.table.data = self.thread_rows()
         self.schedule_detail_update()
 
@@ -2092,6 +2122,7 @@ class Propolis(toga.App):
     def show_new_inbox(self):
         """Start showing the open account's inbox, from its inbox view."""
         self.view, self.reading = INBOX, None
+        self.show_view_options()
         self.chosen_filters.clear()
         self.update_filter_menu()
         self.search.value = ""

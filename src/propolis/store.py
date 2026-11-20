@@ -28,7 +28,7 @@ from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -58,6 +58,8 @@ INBOX = "inbox"
 UNREAD = "unread"
 DONE = "done"
 VIEWS = (INBOX, ATTENTION, UNREAD, DONE)
+#: How many days back the done view goes, by when threads were marked as done.
+DONE_DAYS = 7
 
 #: The thread details that `Inbox.threads()` can filter by.
 FILTER_COLUMNS = ("type", "reason", "repo")
@@ -135,6 +137,11 @@ _SEQUENCE = itertools.count()
 def now() -> str:
     """The current UTC time, precise enough to order things done in a burst."""
     return datetime.now(UTC).strftime(_FORMAT)
+
+
+def start_of_today() -> str:
+    """When today started, in this Mac's time zone, in the format of `now()`."""
+    return datetime.combine(date.today(), time()).astimezone(UTC).strftime(_FORMAT)
 
 
 def stamp(timestamp: str) -> str:
@@ -251,25 +258,31 @@ class Inbox:
         view: str,
         search: str = "",
         filters: Mapping[str, str] | None = None,
+        done_since: str | None = None,
     ) -> list[Thread]:
         """The threads in a view.
 
         The inbox and its unread view are ordered by the latest activity that
         needed a response from you, newest first, and the done view by GitHub's
         latest activity. A label, and the attention view, are ordered by when
-        each thread was given it, oldest first, so threads stay put.
+        each thread was given it, oldest first, so threads stay put. The done
+        view only has threads marked as done in the last `DONE_DAYS` days.
 
         :param view: `INBOX`, `ATTENTION`, `UNREAD`, `DONE`, or a label's ID.
         :param search: Only include threads whose title or repository contains
             this text (case-insensitive).
         :param filters: Only include threads with exactly these values, keyed
             by detail (any of `FILTER_COLUMNS`), like ``{"type": "Issue"}``.
+        :param done_since: In the done view, only include threads marked as
+            done at or after this time, in the format of `now()`, such as
+            `start_of_today()`.
         """
         filters = filters or {}
         for column in filters:
             if column not in FILTER_COLUMNS:
                 raise ValueError(f"Can't filter threads by {column!r}.")
         search = search.strip().lower()
+        cutoff = max(_done_cutoff(), done_since or "")
 
         def wanted(thread: Thread) -> bool:
             return (
@@ -281,7 +294,7 @@ class Inbox:
         found = [
             (state, thread)
             for thread_id, state in self.state.threads.items()
-            if _in_view(view, state)
+            if _in_view(view, state, cutoff)
             and (details := self._threads.get(thread_id)) is not None
             and wanted(thread := self._with_state(details, state))
         ]
@@ -300,6 +313,7 @@ class Inbox:
         view: str,
         search: str = "",
         filters: Mapping[str, str] | None = None,
+        done_since: str | None = None,
     ) -> dict[str, dict[str, int]]:
         """For each of `FILTER_COLUMNS`, how many threads in a view have each
         value: how many choosing that value would show, given the search and
@@ -315,6 +329,7 @@ class Inbox:
                         view,
                         search,
                         {c: v for c, v in filters.items() if c != column},
+                        done_since,
                     )
                 )
             )
@@ -350,11 +365,12 @@ class Inbox:
 
     def _count(self, counts, include=()) -> dict[str, int]:
         result = dict.fromkeys((INBOX, ATTENTION, *include), 0)
+        cutoff = _done_cutoff()
         for thread_id, state in self.state.threads.items():
             if thread_id not in self._threads or not counts(state):
                 continue
             for view in (INBOX, *include):
-                if _in_view(view, state):
+                if _in_view(view, state, cutoff):
                     result[view] += 1
             for label_id in state.labels:
                 result[label_id] = result.get(label_id, 0) + 1
@@ -503,7 +519,16 @@ class Inbox:
         return name
 
 
-def _in_view(view: str, state: ThreadState) -> bool:
+def _done_cutoff() -> str:
+    """The earliest a thread can have been marked as done and still be in the
+    done view."""
+    moment = datetime.strptime(now(), _FORMAT) - timedelta(days=DONE_DAYS)
+    return moment.strftime(_FORMAT)
+
+
+def _in_view(view: str, state: ThreadState, done_cutoff: str = "") -> bool:
+    """Whether a thread is in a view. The done view only has threads marked as
+    done at or after ``done_cutoff``."""
     if view in (INBOX, UNREAD):
         # Attention required counts as a label: a thread there isn't in the
         # inbox.
@@ -514,7 +539,7 @@ def _in_view(view: str, state: ThreadState) -> bool:
             and (view == INBOX or state.new)
         )
     if view == DONE:
-        return state.done_at is not None
+        return state.done_at is not None and state.done_at >= done_cutoff
     return view in state.labels
 
 

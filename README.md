@@ -40,6 +40,9 @@ you. A failing CI run on one of your pull requests does count.
     Attention required included, and marks it as done on GitHub. Activity
     from someone else brings it back to the inbox. Threads you clear on
     github.com go to Done when Propolis next starts, unless they have a label.
+  - Done lists the threads marked as done in the last seven days. Activity
+    still brings older ones back to the inbox. Turn on **Done today**, beside
+    the search field in Done, to list just the ones marked as done today.
   - Each row starts with GitHub's Octicon for what it's about: an issue, pull
     request, discussion, release, commit, CI run, Dependabot or security
     alert, or invitation (or a bell, for anything else). Issues, pull
